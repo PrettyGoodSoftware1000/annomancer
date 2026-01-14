@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Let's anno.</title>
+<title>Annomancer - Greedy Sequential</title>
 
 <script src="pdf.js"></script>
 <script src="xlsx.full.min.js"></script>
@@ -60,7 +60,7 @@
     text-align:right;
   }
 
-  #pdfContainer { margin-top:170px; }
+  #pdfContainer { margin-top:170px; display:none; }
 
   canvas {
     border:1px solid #ccc;
@@ -107,6 +107,35 @@
   .protected-content {
     display: none;
   }
+
+  .custom-file-input {
+    display: inline-block;
+  }
+
+  .custom-file-input input[type="file"] {
+    display: none;
+  }
+
+  .custom-file-input label {
+    display: inline-block;
+    padding: 10px 16px;
+    background: #0078ff;
+    color: #fff;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    margin: 10px;
+  }
+
+  .custom-file-input label:hover {
+    background: #005fd1;
+  }
+
+  .file-name {
+    margin-left: 10px;
+    font-style: italic;
+    color: #666;
+  }
 </style>
 </head>
 
@@ -128,19 +157,27 @@
   <input type="color" id="borderPicker" value="#FF0000">
 
   <label><b>Text Box Color:</b></label>
-  <input type="color" id="textPicker" value="#000080">
+  <input type="color" id="textPicker" value="#FF0001">
 </div>
 
 <div style="position:relative; width:85%; margin:auto; margin-top:10px;">
   <div style="text-align:center;">
-    <input type="file" id="pdfFile" accept="application/pdf" />
+    <div class="custom-file-input">
+      <label for="pdfFile">Select your pdf</label>
+      <input type="file" id="pdfFile" accept="application/pdf" />
+      <span id="pdfFileName" class="file-name"></span>
+    </div>
   </div>
   <button id="debugButton" style="position:absolute; right:0; top:0;">Debug mode</button>
 </div>
 
 <br>
 
-<input type="file" id="excelFile" accept=".xlsx"><br>
+<div class="custom-file-input">
+  <label for="excelFile">Select your anno spreadsheet</label>
+  <input type="file" id="excelFile" accept=".xlsx">
+  <span id="excelFileName" class="file-name"></span>
+</div><br>
 
 <button id="autoAnnotateButton">I Cast Annotate!</button><br>
 
@@ -226,7 +263,9 @@ function setFont(px,fam){ mctx.font=px+"px "+(fam||"sans-serif"); }
 function measure(t){ return mctx.measureText(t).width||0; }
 
 /* ================================================
-   ULTRASPLIT SEARCH ENGINE (Option 1)
+   GREEDY SEQUENTIAL SEARCH ENGINE
+   Supports up to 400 words with up to 10 line breaks
+   Position-aware: segments must be sequential in PDF
    ================================================ */
 async function extractMatches(pdfData, term){
   const pdf = await pdfjsLib.getDocument({data: pdfData}).promise;
@@ -234,127 +273,181 @@ async function extractMatches(pdfData, term){
   const search = term.trim();
   if (!search) return out;
 
-  /* split positions on spaces */
-  const splitPoints = [];
-  for (let i=0;i<search.length;i++){
-    if (search[i] === " ") splitPoints.push(i);
-  }
+  const MAX_SEGMENTS = 11; /* 10 line breaks = 11 segments max */
 
   /* process each page */
-  for (let pageNum=1; pageNum<=pdf.numPages; pageNum++){
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
     const page = await pdf.getPage(pageNum);
     const text = await page.getTextContent();
     let chars = [];
 
     /* flatten char runs */
-    for (const item of text.items){
-      const str=item.str||"";
-      const T=item.transform;
-      for (let i=0;i<str.length;i++){
-        chars.push({ ch:str[i], T, item, offset:i });
+    for (const item of text.items) {
+      const str = item.str || "";
+      const T = item.transform;
+      for (let i = 0; i < str.length; i++) {
+        chars.push({ ch: str[i], T, item, offset: i });
       }
     }
     if (!chars.length) continue;
 
-    const merged = chars.map(c=>c.ch).join("");
+    const merged = chars.map(c => c.ch).join("");
     const mergedLower = merged.toLowerCase();
 
-    /* literal block finder */
-    function findLiteralBoxes(needle){
+    /* literal block finder - returns box AND end position in merged text */
+    function findLiteralBox(needle, startFrom = 0) {
+      if (!needle) return null;
       const nl = needle.toLowerCase();
-      let idx=0, blocks=[];
 
-      while (true){
-        let pos = mergedLower.indexOf(nl, idx);
-        if (pos===-1) break;
-        idx = pos+1;
+      let pos = mergedLower.indexOf(nl, startFrom);
+      if (pos === -1) return null;
 
-        let end = pos + needle.length - 1;
-        if (end >= chars.length) continue;
+      let end = pos + needle.length - 1;
+      if (end >= chars.length) return null;
 
-        let minLeft=Infinity, maxRight=-Infinity;
-        let minBot=Infinity, maxTop=-Infinity;
+      let minLeft = Infinity, maxRight = -Infinity;
+      let minBot = Infinity, maxTop = -Infinity;
 
-        for (let c=pos; c<=end; c++){
-          const ch = chars[c];
-          const T = ch.T;
-          const item = ch.item;
+      for (let c = pos; c <= end; c++) {
+        const ch = chars[c];
+        const T = ch.T;
+        const item = ch.item;
 
-          const runW = item.width||0;
-          const runLen = item.str.length||1;
-          const charW = runW/runLen;
+        const runW = item.width || 0;
+        const runLen = item.str.length || 1;
+        const charW = runW / runLen;
 
-          const h = Math.hypot(T[2],T[3]) || Math.abs(T[3]) || 10;
-          const yTop = T[5] + h*(1+TOPOS);
-          const yBot = T[5] - h*DESC;
+        const h = Math.hypot(T[2], T[3]) || Math.abs(T[3]) || 10;
+        const yTop = T[5] + h * (1 + TOPOS);
+        const yBot = T[5] - h * DESC;
 
-          const left = T[4] + charW*ch.offset;
-          const right= left + charW;
+        const left = T[4] + charW * ch.offset;
+        const right = left + charW;
 
-          if(left<minLeft)minLeft=left;
-          if(right>maxRight)maxRight=right;
-          if(yTop>maxTop)maxTop=yTop;
-          if(yBot<minBot)minBot=yBot;
-        }
-
-        minLeft -= LEFT_PAD;
-        maxRight += RIGHT_PAD;
-
-        blocks.push({
-          pageNum,
-          x:minLeft,
-          yTop:maxTop,
-          yBottom:minBot,
-          w:maxRight-minLeft,
-          h:maxTop-minBot
-        });
+        if (left < minLeft) minLeft = left;
+        if (right > maxRight) maxRight = right;
+        if (yTop > maxTop) maxTop = yTop;
+        if (yBot < minBot) minBot = yBot;
       }
-      return blocks;
+
+      minLeft -= LEFT_PAD;
+      maxRight += RIGHT_PAD;
+
+      return {
+        box: {
+          pageNum,
+          x: minLeft,
+          yTop: maxTop,
+          yBottom: minBot,
+          w: maxRight - minLeft,
+          h: maxTop - minBot
+        },
+        endPos: end + 1 /* position to start next search from */
+      };
     }
 
-    /* literal match first */
-    const literal = findLiteralBoxes(search);
-    if (literal.length){
-      out.push(...literal);
+    /* Check if boxes are within reasonable proximity of each other */
+    function boxesAreProximate(boxes) {
+      if (boxes.length <= 1) return true;
+      
+      /* Calculate average box height as baseline */
+      let totalHeight = 0;
+      for (const b of boxes) {
+        totalHeight += b.h;
+      }
+      const avgHeight = totalHeight / boxes.length;
+      const maxAllowedGap = avgHeight * 15; /* Allow up to ~15 lines of separation */
+      
+      /* Sort boxes by vertical position (top to bottom) */
+      const sorted = [...boxes].sort((a, b) => b.yTop - a.yTop);
+      
+      /* Check gap between each consecutive pair */
+      for (let i = 0; i < sorted.length - 1; i++) {
+        const upper = sorted[i];
+        const lower = sorted[i + 1];
+        const gap = upper.yBottom - lower.yTop;
+        
+        /* If gap is positive and too large, boxes are too far apart */
+        if (gap > maxAllowedGap) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    /* Greedy sequential: find longest match from current position, then continue */
+    function findGreedySegments(searchText) {
+      const segments = [];
+      const words = searchText.split(/\s+/);
+      let wordIndex = 0;
+      let searchPos = 0; /* Position in merged PDF text - ensures sequential matches */
+
+      while (wordIndex < words.length && segments.length < MAX_SEGMENTS) {
+        let found = false;
+
+        /* Try from all remaining words down to single word */
+        for (let endIdx = words.length; endIdx > wordIndex; endIdx--) {
+          const candidate = words.slice(wordIndex, endIdx).join(" ");
+          const result = findLiteralBox(candidate, searchPos);
+
+          if (result) {
+            segments.push(result.box);
+            searchPos = result.endPos; /* Next search starts after this match */
+            wordIndex = endIdx; /* Move past matched words */
+            found = true;
+            break;
+          }
+        }
+
+        /* If even a single word isn't found at this position, fail completely */
+        if (!found) {
+          return []; /* Return empty - require complete match */
+        }
+      }
+
+      /* Only return segments if ALL words were matched */
+      if (wordIndex < words.length) {
+        return []; /* Incomplete match */
+      }
+
+      return segments;
+    }
+
+    /* Try literal match first - best case */
+    const literalResult = findLiteralBox(search, 0);
+    if (literalResult) {
+      out.push(literalResult.box);
       continue;
     }
 
-    /* dynamic split mode */
-    let giantBox=null;
+    /* Use greedy sequential matching */
+    const segments = findGreedySegments(search);
 
-    for (const split of splitPoints){
-      const leftHalf = search.slice(0,split).trim();
-      const rightHalf = search.slice(split+1).trim();
-      if(!leftHalf || !rightHalf) continue;
+    /* Skip if no complete match found */
+    if (segments.length === 0) continue;
 
-      const L = findLiteralBoxes(leftHalf);
-      const R = findLiteralBoxes(rightHalf);
+    /* Proximity check: reject if boxes are too far apart */
+    if (!boxesAreProximate(segments)) continue;
 
-      if(!L.length || !R.length) continue;
+    /* Merge all segment boxes into one */
+    let minLeft = Infinity, maxRight = -Infinity;
+    let minBot = Infinity, maxTop = -Infinity;
 
-      /* merge */
-      let minLeft=Infinity, maxRight=-Infinity;
-      let minBot=Infinity, maxTop=-Infinity;
-
-      for(const b of [...L,...R]){
-        if(b.x < minLeft) minLeft=b.x;
-        if(b.x+b.w > maxRight) maxRight=b.x+b.w;
-        if(b.yBottom < minBot) minBot=b.yBottom;
-        if(b.yTop > maxTop) maxTop=b.yTop;
-      }
-
-      giantBox = {
-        pageNum,
-        x:minLeft,
-        yTop:maxTop,
-        yBottom:minBot,
-        w:maxRight-minLeft,
-        h:maxTop-minBot
-      };
-      break;
+    for (const b of segments) {
+      if (b.x < minLeft) minLeft = b.x;
+      if (b.x + b.w > maxRight) maxRight = b.x + b.w;
+      if (b.yBottom < minBot) minBot = b.yBottom;
+      if (b.yTop > maxTop) maxTop = b.yTop;
     }
 
-    if(giantBox) out.push(giantBox);
+    out.push({
+      pageNum,
+      x: minLeft,
+      yTop: maxTop,
+      yBottom: minBot,
+      w: maxRight - minLeft,
+      h: maxTop - minBot
+    });
   }
 
   return out;
@@ -362,7 +455,18 @@ async function extractMatches(pdfData, term){
 
 /* everything below this point stays exactly the same */
 
-function esc(s){ return s.replace(/\\/g,"\\\\").replace(/\(/g,"\\(").replace(/\)/g,"\\)"); }
+function esc(s){ 
+  return s
+    .replace(/\\/g,"\\\\")
+    .replace(/\(/g,"\\(")
+    .replace(/\)/g,"\\)")
+    .replace(/[\r\n]+/g," ")      // Replace line breaks with space
+    .replace(/[""]/g,'"')          // Smart quotes → straight quotes
+    .replace(/['']/g,"'")          // Smart apostrophes → straight
+    .replace(/[—–]/g,"-")          // Em/en dash → hyphen
+    .replace(/…/g,"...")           // Ellipsis → three dots
+    .replace(/[^\x00-\x7F]/g,"");  // Remove any remaining non-ASCII
+}
 
 function hexToRgbFloats(hex){
   hex=hex.replace("#","");
@@ -465,9 +569,13 @@ async function render(pdfData,matches,borderHex){
 }
 
 /* Debug mode */
+let debugMode = false;
+
 document.getElementById("debugButton").onclick=()=>{
+  debugMode = true;
   document.getElementById("manualFields").style.display="block";
   document.getElementById("debugRowZone").style.display="block";
+  document.getElementById("pdfContainer").style.display="block";
 };
 
 /* Manual mode */
@@ -535,7 +643,7 @@ async function runAutomation(){
 
   autoBtn.disabled=true;
   autoBtn.style.background="#cc0000";
-  autoBtn.textContent="Divining Annotationsâ€¦";
+  autoBtn.textContent="Divining Annotations...";
 
   const borderHex=document.getElementById("borderPicker").value;
   const textHex=document.getElementById("textPicker").value;
@@ -559,12 +667,14 @@ async function runAutomation(){
     }
 
     const matches=await extractMatches(new Uint8Array(pdfArray), term.toString());
-    await render(new Uint8Array(pdfArray), matches, borderHex);
+    if (debugMode) {
+      await render(new Uint8Array(pdfArray), matches, borderHex);
+    }
 
     const blocks=generateAnnotBlocks(matches, comment||"", borderHex, textHex);
     cumulativeAnnots.push(blocks);
 
-    out.textContent=`Row ${rowNum} processedâ€¦`;
+    out.textContent=`Row ${rowNum} processed...`;
     rowNum++;
   }
 
@@ -599,11 +709,44 @@ trailer
   const blob=new Blob([fdf],{type:"application/vnd.fdf"});
   const url=URL.createObjectURL(blob);
 
+  const d20Roll = Math.floor(Math.random() * 20) + 1;
+  const critText = d20Roll === 20 ? " Crit!" : "";
+
+  /* Visconti Tarot - Major Arcana */
+  const viscontiTarot = [
+    { name: "The Fool", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/9/90/Visconti-Sforza_tarot_deck._The_Fool.jpg/170px-Visconti-Sforza_tarot_deck._The_Fool.jpg" },
+    { name: "The Magician", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6d/Visconti-Sforza_tarot_deck._The_Magician.jpg/170px-Visconti-Sforza_tarot_deck._The_Magician.jpg" },
+    { name: "The High Priestess", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Visconti-Sforza_tarot_deck._The_High_Priestess.jpg/170px-Visconti-Sforza_tarot_deck._The_High_Priestess.jpg" },
+    { name: "The Empress", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c9/Visconti-Sforza_tarot_deck._The_Empress.jpg/170px-Visconti-Sforza_tarot_deck._The_Empress.jpg" },
+    { name: "The Emperor", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/85/Visconti-Sforza_tarot_deck._The_Emperor.jpg/170px-Visconti-Sforza_tarot_deck._The_Emperor.jpg" },
+    { name: "The Hierophant", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fb/Visconti-Sforza_tarot_deck._The_Pope.jpg/170px-Visconti-Sforza_tarot_deck._The_Pope.jpg" },
+    { name: "The Lovers", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/7/73/Visconti-Sforza_tarot_deck._Love.jpg/170px-Visconti-Sforza_tarot_deck._Love.jpg" },
+    { name: "The Chariot", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/40/Visconti-Sforza_tarot_deck._The_Chariot.jpg/170px-Visconti-Sforza_tarot_deck._The_Chariot.jpg" },
+    { name: "Strength", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/Visconti-Sforza_tarot_deck._Fortitude.jpg/170px-Visconti-Sforza_tarot_deck._Fortitude.jpg" },
+    { name: "The Hermit", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/Visconti-Sforza_tarot_deck._The_Hermit.jpg/170px-Visconti-Sforza_tarot_deck._The_Hermit.jpg" },
+    { name: "Wheel of Fortune", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/Visconti-Sforza_tarot_deck._Wheel_of_Fortune.jpg/170px-Visconti-Sforza_tarot_deck._Wheel_of_Fortune.jpg" },
+    { name: "Justice", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/3/31/Visconti-Sforza_tarot_deck._Justice.jpg/170px-Visconti-Sforza_tarot_deck._Justice.jpg" },
+    { name: "The Hanged Man", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/46/Visconti-Sforza_tarot_deck._The_Hanged_Man.jpg/170px-Visconti-Sforza_tarot_deck._The_Hanged_Man.jpg" },
+    { name: "Death", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2a/Visconti-Sforza_tarot_deck._Death.jpg/170px-Visconti-Sforza_tarot_deck._Death.jpg" },
+    { name: "Temperance", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0d/Visconti-Sforza_tarot_deck._Temperance.jpg/170px-Visconti-Sforza_tarot_deck._Temperance.jpg" },
+    { name: "The Star", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/Visconti-Sforza_tarot_deck._The_Star.jpg/170px-Visconti-Sforza_tarot_deck._The_Star.jpg" },
+    { name: "The Moon", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e2/Visconti-Sforza_tarot_deck._The_Moon.jpg/170px-Visconti-Sforza_tarot_deck._The_Moon.jpg" },
+    { name: "The Sun", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/forty/Visconti-Sforza_tarot_deck._The_Sun.jpg/170px-Visconti-Sforza_tarot_deck._The_Sun.jpg" },
+    { name: "Judgement", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f4/Visconti-Sforza_tarot_deck._The_Last_Judgement.jpg/170px-Visconti-Sforza_tarot_deck._The_Last_Judgement.jpg" },
+    { name: "The World", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Visconti-Sforza_tarot_deck._The_World.jpg/170px-Visconti-Sforza_tarot_deck._The_World.jpg" }
+  ];
+
+  const drawnCard = viscontiTarot[Math.floor(Math.random() * viscontiTarot.length)];
+
   out.innerHTML=
-    `Your annos have been 'tated. Import this onto your pdf.<br><a href="${url}" download="${finalName}">Download your annos</a>`;
+    `Your annos have been 'tated. Import this onto your pdf.<br>
+<a href="${url}" download="${finalName}">Download your annos</a><br><br>
+You also rolled a ${d20Roll} on a 20-sided die.${critText}<br><br>
+You have drawn the ${drawnCard.name}:<br>
+<img src="${drawnCard.img}" alt="${drawnCard.name}" style="max-width:200px; margin-top:10px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.2);">`;
 
   autoBtn.style.background="green";
-  autoBtn.textContent="Annos are â€™tated!";
+  autoBtn.textContent="Annos are 'tated!";
 
   setTimeout(()=>{
     cumulativeAnnots=[];
@@ -615,10 +758,22 @@ trailer
 
     document.getElementById("rowInput").value=2;
     pdfInput.value="";
+    document.getElementById("pdfFileName").textContent="";
   },1500);
 }
 
 document.getElementById("autoAnnotateButton").onclick=runAutomation;
+
+// Display selected file names
+document.getElementById("pdfFile").onchange=function(){
+  const fileName = this.files[0] ? this.files[0].name : "";
+  document.getElementById("pdfFileName").textContent = fileName;
+};
+
+document.getElementById("excelFile").onchange=function(){
+  const fileName = this.files[0] ? this.files[0].name : "";
+  document.getElementById("excelFileName").textContent = fileName;
+};
 
 document.getElementById("stepTextButton").onclick=()=>{
   let r=parseInt(document.getElementById("rowInput").value,10);
