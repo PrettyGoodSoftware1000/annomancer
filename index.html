@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Annomancer - Greedy Sequential</title>
+<title>Annomancer - Metal v34</title>
 
 <script src="pdf.js"></script>
 <script src="xlsx.full.min.js"></script>
@@ -141,7 +141,7 @@
 
 <body>
 
-<h1>Annomancer</h1>
+<h1>Annomancer (Metal v34)</h1>
 <p>A little science. A little magic. A roll of the dice. Boom. You've got annos.</p>
 
 <div id="passwordSection">
@@ -153,6 +153,13 @@
 
 <div id="protectedContent" class="protected-content">
 <div class="leftControls">
+  <label><b>Project:</b></label>
+  <select id="projectSelect" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px;">
+    <option value="edwards_patient" selected>Edwards Patient</option>
+    <option value="edwards_hcp">Edwards HCP</option>
+    <option value="wainua_patient">Wainua Patient</option>
+  </select>
+
   <label><b>Border Color:</b></label>
   <input type="color" id="borderPicker" value="#FF0000">
 
@@ -169,15 +176,36 @@
     </div>
   </div>
   <button id="debugButton" style="position:absolute; right:0; top:0;">Debug mode</button>
+  <a href="Annomover.html" style="position:absolute; right:0; top:45px;">
+    <button type="button" style="background:#6c757d; color:#fff; padding:10px 16px; border-radius:6px; border:1px solid #5a6268; cursor:pointer;">Annomover</button>
+  </a>
 </div>
 
 <br>
 
-<div class="custom-file-input">
-  <label for="excelFile">Select your anno spreadsheet</label>
-  <input type="file" id="excelFile" accept=".xlsx">
-  <span id="excelFileName" class="file-name"></span>
-</div><br>
+<div style="background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 15px; margin-bottom: 15px; max-width: 550px; margin-left: auto; margin-right: auto;">
+  <div style="font-weight: bold; margin-bottom: 10px; color: #333; text-align: center;">📊 Spreadsheet</div>
+  
+  <!-- Cloud URL input - hidden by default, shown in debug mode -->
+  <div id="cloudUrlSection" style="margin-bottom: 12px; display: none;">
+    <input type="text" id="cloudUrl" placeholder="Paste SharePoint or Egnyte link" style="width: 100%; padding: 8px; border-radius: 4px; border: 1px solid #ccc; box-sizing: border-box;">
+  </div>
+  
+  <!-- Two button row - centered -->
+  <div style="display: flex; gap: 10px; align-items: center; justify-content: center; margin-bottom: 10px;">
+    <button id="downloadLatestBtn" style="padding: 10px 16px; background: #0078d4; color: white; border: none; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+      ⬇️ Download Latest Spreadsheet
+    </button>
+    <span style="color: #666;">→</span>
+    <button id="selectDownloadedBtn" style="padding: 10px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+      📂 Select Downloaded File
+    </button>
+    <input type="file" id="excelFile" accept=".xlsx" style="display: none;">
+  </div>
+  
+  <!-- Status -->
+  <div id="spreadsheetStatus" style="font-size: 13px; color: #666; text-align: center;"></div>
+</div>
 
 <button id="autoAnnotateButton">I Cast Annotate!</button><br>
 
@@ -263,9 +291,13 @@ function setFont(px,fam){ mctx.font=px+"px "+(fam||"sans-serif"); }
 function measure(t){ return mctx.measureText(t).width||0; }
 
 /* ================================================
-   GREEDY SEQUENTIAL SEARCH ENGINE
-   Supports up to 400 words with up to 10 line breaks
+   METAL v34 - GREEDY SEQUENTIAL SEARCH ENGINE
+   Supports up to 600 words with up to 12 line breaks
    Position-aware: segments must be sequential in PDF
+   Strict proximity: max 4x line height gap, max 25 lines total
+   Column A: line breaks stripped for searching
+   Column C: line breaks preserved in FDF comments
+   Cloud: Project dropdown + 1-click download via UniqueId
    ================================================ */
 async function extractMatches(pdfData, term){
   const pdf = await pdfjsLib.getDocument({data: pdfData}).promise;
@@ -273,7 +305,7 @@ async function extractMatches(pdfData, term){
   const search = term.trim();
   if (!search) return out;
 
-  const MAX_SEGMENTS = 11; /* 10 line breaks = 11 segments max */
+  const MAX_SEGMENTS = 13; /* 12 line breaks = 13 segments max */
 
   /* process each page */
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
@@ -356,20 +388,59 @@ async function extractMatches(pdfData, term){
         totalHeight += b.h;
       }
       const avgHeight = totalHeight / boxes.length;
-      const maxAllowedGap = avgHeight * 15; /* Allow up to ~15 lines of separation */
       
-      /* Sort boxes by vertical position (top to bottom) */
+      /* STRICT LIMITS:
+         - Vertical gap: max 4x line height (allows ~3 blank lines between segments)
+         - Horizontal: boxes must overlap horizontally OR be within reasonable reading flow
+         - Total height: merged box can't be more than 25x average line height (~12 real line breaks)
+      */
+      const maxVerticalGap = avgHeight * 4;
+      const maxTotalHeight = avgHeight * 25;
+      
+      /* Sort boxes by vertical position (top to bottom in PDF coords) */
       const sorted = [...boxes].sort((a, b) => b.yTop - a.yTop);
+      
+      /* Check total vertical span */
+      const topMost = sorted[0].yTop;
+      const bottomMost = sorted[sorted.length - 1].yBottom;
+      const totalSpan = topMost - bottomMost;
+      
+      if (totalSpan > maxTotalHeight) {
+        return false; /* Merged box would be way too tall */
+      }
       
       /* Check gap between each consecutive pair */
       for (let i = 0; i < sorted.length - 1; i++) {
         const upper = sorted[i];
         const lower = sorted[i + 1];
-        const gap = upper.yBottom - lower.yTop;
         
-        /* If gap is positive and too large, boxes are too far apart */
-        if (gap > maxAllowedGap) {
-          return false;
+        /* Vertical gap check */
+        const vGap = upper.yBottom - lower.yTop;
+        if (vGap > maxVerticalGap) {
+          return false; /* Too much vertical space between segments */
+        }
+        
+        /* Horizontal overlap/proximity check for multi-column detection */
+        /* Boxes should either overlap horizontally or be close enough for text flow */
+        const upperLeft = upper.x;
+        const upperRight = upper.x + upper.w;
+        const lowerLeft = lower.x;
+        const lowerRight = lower.x + lower.w;
+        
+        /* Check if boxes overlap horizontally */
+        const horizOverlap = !(upperRight < lowerLeft || lowerRight < upperLeft);
+        
+        /* If no horizontal overlap, check if they're reasonably close */
+        if (!horizOverlap) {
+          const horizGap = Math.min(
+            Math.abs(upperRight - lowerLeft),
+            Math.abs(lowerRight - upperLeft)
+          );
+          /* Allow horizontal gap up to ~half a page width (for text wrap) */
+          const pageWidth = 612; /* Standard letter width in points */
+          if (horizGap > pageWidth * 0.6) {
+            return false; /* Boxes are in different columns or areas */
+          }
         }
       }
       return true;
@@ -468,6 +539,27 @@ function esc(s){
     .replace(/[^\x00-\x7F]/g,"");  // Remove any remaining non-ASCII
 }
 
+/* Escape for comments - preserves line breaks for FDF */
+function escComment(s){ 
+  return s
+    .replace(/\\/g,"\\\\")
+    .replace(/\(/g,"\\(")
+    .replace(/\)/g,"\\)")
+    .replace(/\r\n/g,"\\r")        // Windows line breaks → FDF line break
+    .replace(/\n/g,"\\r")          // Unix line breaks → FDF line break
+    .replace(/\r/g,"\\r")          // Mac line breaks → FDF line break
+    .replace(/[""]/g,'"')          // Smart quotes → straight quotes
+    .replace(/['']/g,"'")          // Smart apostrophes → straight
+    .replace(/[—–]/g,"-")          // Em/en dash → hyphen
+    .replace(/…/g,"...")           // Ellipsis → three dots
+    .replace(/[^\x00-\x7F]/g,"");  // Remove any remaining non-ASCII
+}
+
+/* Strip line breaks from search terms */
+function stripLineBreaks(s){
+  return s.replace(/[\r\n]+/g," ").replace(/\s+/g," ").trim();
+}
+
 function hexToRgbFloats(hex){
   hex=hex.replace("#","");
   const r=parseInt(hex.slice(0,2),16)/255;
@@ -477,7 +569,7 @@ function hexToRgbFloats(hex){
 }
 
 function generateAnnotBlocks(matches, commentText, borderHex, textHex){
-  const comment=esc((commentText||"").trim());
+  const comment=escComment((commentText||"").trim());
   const EXP=1.5, GAP=0.5, CH=55;
   const BORDER=hexToRgbFloats(borderHex);
   const TEXT=hexToRgbFloats(textHex);
@@ -576,6 +668,7 @@ document.getElementById("debugButton").onclick=()=>{
   document.getElementById("manualFields").style.display="block";
   document.getElementById("debugRowZone").style.display="block";
   document.getElementById("pdfContainer").style.display="block";
+  document.getElementById("cloudUrlSection").style.display="block";
 };
 
 /* Manual mode */
@@ -619,7 +712,7 @@ trailer
 };
 
 /*
-  === AUTOMATION ENGINE (UNCHANGED) ===
+  === AUTOMATION ENGINE ===
 */
 
 let cumulativeAnnots=[];
@@ -634,7 +727,7 @@ async function runAutomation(){
   const excelFile=document.getElementById("excelFile").files[0];
 
   const pdfFile=pdfInput.files[0];
-  if(!pdfFile){ out.textContent="That didn't work. Look, I'm here to cast spells, not blame. Let's just stay someone may have forgot to add a pdf."; return; }
+  if(!pdfFile){ out.textContent="That didn't work. Look, I'm here to cast spells, not blame. Let's just say someone may have forgot to add a pdf."; return; }
   if(!excelFile){ out.textContent="I'm magic, but not that magic. Add a spreadsheet and try again."; return; }
 
   automationRunning=true;
@@ -648,8 +741,8 @@ async function runAutomation(){
   const borderHex=document.getElementById("borderPicker").value;
   const textHex=document.getElementById("textPicker").value;
 
-  const excelArray=await excelFile.arrayBuffer();
-  const wb=XLSX.read(new Uint8Array(excelArray),{type:"array"});
+  const excelArray = new Uint8Array(await excelFile.arrayBuffer());
+  const wb=XLSX.read(excelArray,{type:"array"});
   const sheet=wb.Sheets[wb.SheetNames[0]];
   const rows=XLSX.utils.sheet_to_json(sheet,{header:1})||[];
 
@@ -659,14 +752,15 @@ async function runAutomation(){
     const idx=rowNum-1;
     const row=rows[idx]||[];
 
-    const term=row[0];
+    const rawTerm=row[0];
     const comment=row[2];
 
-    if(!term){
+    if(!rawTerm){
       break;
     }
 
-    const matches=await extractMatches(new Uint8Array(pdfArray), term.toString());
+    const term = stripLineBreaks(rawTerm.toString());
+    const matches=await extractMatches(new Uint8Array(pdfArray), term);
     if (debugMode) {
       await render(new Uint8Array(pdfArray), matches, borderHex);
     }
@@ -712,28 +806,28 @@ trailer
   const d20Roll = Math.floor(Math.random() * 20) + 1;
   const critText = d20Roll === 20 ? " Crit!" : "";
 
-  /* Visconti Tarot - Major Arcana */
+  /* Visconti Tarot - Major Arcana from local cards folder */
   const viscontiTarot = [
-    { name: "The Fool", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/9/90/Visconti-Sforza_tarot_deck._The_Fool.jpg/170px-Visconti-Sforza_tarot_deck._The_Fool.jpg" },
-    { name: "The Magician", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6d/Visconti-Sforza_tarot_deck._The_Magician.jpg/170px-Visconti-Sforza_tarot_deck._The_Magician.jpg" },
-    { name: "The High Priestess", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Visconti-Sforza_tarot_deck._The_High_Priestess.jpg/170px-Visconti-Sforza_tarot_deck._The_High_Priestess.jpg" },
-    { name: "The Empress", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c9/Visconti-Sforza_tarot_deck._The_Empress.jpg/170px-Visconti-Sforza_tarot_deck._The_Empress.jpg" },
-    { name: "The Emperor", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/85/Visconti-Sforza_tarot_deck._The_Emperor.jpg/170px-Visconti-Sforza_tarot_deck._The_Emperor.jpg" },
-    { name: "The Hierophant", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fb/Visconti-Sforza_tarot_deck._The_Pope.jpg/170px-Visconti-Sforza_tarot_deck._The_Pope.jpg" },
-    { name: "The Lovers", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/7/73/Visconti-Sforza_tarot_deck._Love.jpg/170px-Visconti-Sforza_tarot_deck._Love.jpg" },
-    { name: "The Chariot", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/40/Visconti-Sforza_tarot_deck._The_Chariot.jpg/170px-Visconti-Sforza_tarot_deck._The_Chariot.jpg" },
-    { name: "Strength", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/Visconti-Sforza_tarot_deck._Fortitude.jpg/170px-Visconti-Sforza_tarot_deck._Fortitude.jpg" },
-    { name: "The Hermit", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/Visconti-Sforza_tarot_deck._The_Hermit.jpg/170px-Visconti-Sforza_tarot_deck._The_Hermit.jpg" },
-    { name: "Wheel of Fortune", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/Visconti-Sforza_tarot_deck._Wheel_of_Fortune.jpg/170px-Visconti-Sforza_tarot_deck._Wheel_of_Fortune.jpg" },
-    { name: "Justice", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/3/31/Visconti-Sforza_tarot_deck._Justice.jpg/170px-Visconti-Sforza_tarot_deck._Justice.jpg" },
-    { name: "The Hanged Man", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/46/Visconti-Sforza_tarot_deck._The_Hanged_Man.jpg/170px-Visconti-Sforza_tarot_deck._The_Hanged_Man.jpg" },
-    { name: "Death", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2a/Visconti-Sforza_tarot_deck._Death.jpg/170px-Visconti-Sforza_tarot_deck._Death.jpg" },
-    { name: "Temperance", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0d/Visconti-Sforza_tarot_deck._Temperance.jpg/170px-Visconti-Sforza_tarot_deck._Temperance.jpg" },
-    { name: "The Star", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/Visconti-Sforza_tarot_deck._The_Star.jpg/170px-Visconti-Sforza_tarot_deck._The_Star.jpg" },
-    { name: "The Moon", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e2/Visconti-Sforza_tarot_deck._The_Moon.jpg/170px-Visconti-Sforza_tarot_deck._The_Moon.jpg" },
-    { name: "The Sun", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/forty/Visconti-Sforza_tarot_deck._The_Sun.jpg/170px-Visconti-Sforza_tarot_deck._The_Sun.jpg" },
-    { name: "Judgement", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f4/Visconti-Sforza_tarot_deck._The_Last_Judgement.jpg/170px-Visconti-Sforza_tarot_deck._The_Last_Judgement.jpg" },
-    { name: "The World", img: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Visconti-Sforza_tarot_deck._The_World.jpg/170px-Visconti-Sforza_tarot_deck._The_World.jpg" }
+    { name: "The Fool", img: "cards/The_Fool.jpg" },
+    { name: "The Magician", img: "cards/The_Magician.jpg" },
+    { name: "The High Priestess", img: "cards/The_High_Priestess.jpg" },
+    { name: "The Empress", img: "cards/The_Empress.jpg" },
+    { name: "The Emperor", img: "cards/The_Emperor.jpg" },
+    { name: "The Hierophant", img: "cards/The_Hierophant.jpg" },
+    { name: "The Lovers", img: "cards/The_Lovers.jpg" },
+    { name: "The Chariot", img: "cards/The_Chariot.jpg" },
+    { name: "Strength", img: "cards/Strength.jpg" },
+    { name: "The Hermit", img: "cards/The_Hermit.jpg" },
+    { name: "Wheel of Fortune", img: "cards/Wheel_of_Fortune.jpg" },
+    { name: "Justice", img: "cards/Justice.jpg" },
+    { name: "The Hanged Man", img: "cards/The_Hanged_Man.jpg" },
+    { name: "Death", img: "cards/Death.jpg" },
+    { name: "Temperance", img: "cards/Temperance.jpg" },
+    { name: "The Star", img: "cards/The_Star.jpg" },
+    { name: "The Moon", img: "cards/The_Moon.jpg" },
+    { name: "The Sun", img: "cards/The_Sun.jpg" },
+    { name: "Judgement", img: "cards/Judgement.jpg" },
+    { name: "The World", img: "cards/The_World.jpg" }
   ];
 
   const drawnCard = viscontiTarot[Math.floor(Math.random() * viscontiTarot.length)];
@@ -741,8 +835,7 @@ trailer
   out.innerHTML=
     `Your annos have been 'tated. Import this onto your pdf.<br>
 <a href="${url}" download="${finalName}">Download your annos</a><br><br>
-You also rolled a ${d20Roll} on a 20-sided die.${critText}<br><br>
-You have drawn the ${drawnCard.name}:<br>
+You also rolled a ${d20Roll} on a 20-sided die${critText} and drawn the ${drawnCard.name}:<br>
 <img src="${drawnCard.img}" alt="${drawnCard.name}" style="max-width:200px; margin-top:10px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.2);">`;
 
   autoBtn.style.background="green";
@@ -772,8 +865,129 @@ document.getElementById("pdfFile").onchange=function(){
 
 document.getElementById("excelFile").onchange=function(){
   const fileName = this.files[0] ? this.files[0].name : "";
-  document.getElementById("excelFileName").textContent = fileName;
+  const status = document.getElementById("spreadsheetStatus");
+  status.textContent = fileName ? "✓ Selected: " + fileName : "";
+  status.style.color = "#28a745";
 };
+
+// Cloud download integration
+const CLOUD_URL_KEY = "annomancer_cloud_url";
+
+// Load saved URL on startup
+document.addEventListener("DOMContentLoaded", function() {
+  const savedUrl = localStorage.getItem(CLOUD_URL_KEY);
+  if (savedUrl) {
+    document.getElementById("cloudUrl").value = savedUrl;
+    document.getElementById("spreadsheetStatus").textContent = "☁️ Cloud link saved. Click 'Download Latest' to get the file.";
+  }
+});
+
+// Project configuration - SharePoint UniqueId download URLs
+const PROJECT_URLS = {
+  edwards_patient: "https://interpublic-my.sharepoint.com/personal/mark_habke_fcbcure_com/_layouts/15/download.aspx?UniqueId=697c6e2d-1831-46e2-ae85-3bef83f3bd2c",
+  edwards_hcp: "", // TODO: Add URL when available
+  wainua_patient: ""  // TODO: Add URL when available
+};
+
+// Save URL when it changes (for debug mode custom URLs)
+document.getElementById("cloudUrl").onchange = function() {
+  const url = this.value.trim();
+  if (url) {
+    localStorage.setItem(CLOUD_URL_KEY, url);
+    document.getElementById("spreadsheetStatus").textContent = "☁️ Custom link saved!";
+    document.getElementById("spreadsheetStatus").style.color = "#0078d4";
+  } else {
+    localStorage.removeItem(CLOUD_URL_KEY);
+    document.getElementById("spreadsheetStatus").textContent = "";
+  }
+};
+
+// Download Latest Spreadsheet button
+document.getElementById("downloadLatestBtn").onclick = function() {
+  const status = document.getElementById("spreadsheetStatus");
+  const projectSelect = document.getElementById("projectSelect");
+  const selectedProject = projectSelect.value;
+  
+  // Check for custom URL in debug mode first
+  const customUrl = document.getElementById("cloudUrl").value.trim();
+  let downloadUrl;
+  
+  if (customUrl) {
+    // Use custom URL from debug field - convert to Method 4 format if needed
+    downloadUrl = convertToDownloadUrl(customUrl);
+  } else {
+    // Use project URL
+    downloadUrl = PROJECT_URLS[selectedProject];
+    
+    if (!downloadUrl) {
+      status.textContent = "⚠️ URL not configured for this project yet";
+      status.style.color = "#cc0000";
+      return;
+    }
+  }
+  
+  // Create a hidden anchor and click it to trigger download
+  const a = document.createElement('a');
+  a.href = downloadUrl;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  
+  status.textContent = "⬇️ Download started! Now click 'Select Downloaded File'";
+  status.style.color = "#0078d4";
+};
+
+// Select Downloaded File button
+document.getElementById("selectDownloadedBtn").onclick = function() {
+  document.getElementById("excelFile").click();
+};
+
+/* Convert SharePoint URL to Method 4 (UniqueId) format */
+function convertToDownloadUrl(url) {
+  /* If already a download.aspx URL, return as-is */
+  if (url.includes('download.aspx')) {
+    return url;
+  }
+  
+  /* SharePoint formats - extract UniqueId from d= parameter */
+  if (url.includes('.sharepoint.com')) {
+    /* Look for d=w... parameter which contains the UniqueId */
+    const dMatch = url.match(/[?&]d=w([a-f0-9]+)/i);
+    if (dMatch) {
+      /* Extract the hex string and format as GUID */
+      const hex = dMatch[1];
+      if (hex.length >= 32) {
+        const guid = hex.slice(0,8) + '-' + hex.slice(8,12) + '-' + hex.slice(12,16) + '-' + hex.slice(16,20) + '-' + hex.slice(20,32);
+        
+        /* Extract the personal/site path */
+        const pathMatch = url.match(/(\/personal\/[^\/]+)/);
+        if (pathMatch) {
+          const baseDomain = url.match(/(https?:\/\/[^\/]+)/)[1];
+          return baseDomain + pathMatch[1] + '/_layouts/15/download.aspx?UniqueId=' + guid;
+        }
+      }
+    }
+    
+    /* Fallback: add download=1 */
+    const separator = url.includes('?') ? '&' : '?';
+    return url + separator + 'download=1';
+  }
+  
+  /* Egnyte formats */
+  if (url.includes('.egnyte.com')) {
+    if (url.includes('/fl/')) {
+      return url.replace('/fl/', '/dd/');
+    }
+    if (url.includes('/dd/')) {
+      return url;
+    }
+  }
+  
+  /* Default: return as-is */
+  return url;
+}
 
 document.getElementById("stepTextButton").onclick=()=>{
   let r=parseInt(document.getElementById("rowInput").value,10);
@@ -792,24 +1006,25 @@ async function runStepOnce(r){
   const borderHex=document.getElementById("borderPicker").value;
   const textHex=document.getElementById("textPicker").value;
 
-  const excelArray=await excelFile.arrayBuffer();
-  const wb=XLSX.read(new Uint8Array(excelArray),{type:"array"});
+  const excelArray = new Uint8Array(await excelFile.arrayBuffer());
+  const wb=XLSX.read(excelArray,{type:"array"});
   const sheet=wb.Sheets[wb.SheetNames[0]];
   const rows=XLSX.utils.sheet_to_json(sheet,{header:1})||[];
 
   const idx=r-1;
   const row=rows[idx]||[];
 
-  const term=row[0];
+  const rawTerm=row[0];
   const comment=row[2];
 
-  if(!term){
+  if(!rawTerm){
     out.textContent="Blank encountered.";
     return;
   }
 
+  const term = stripLineBreaks(rawTerm.toString());
   const pdfArray=await pdfFile.arrayBuffer();
-  const matches=await extractMatches(new Uint8Array(pdfArray), term.toString());
+  const matches=await extractMatches(new Uint8Array(pdfArray), term);
   await render(new Uint8Array(pdfArray), matches, borderHex);
 
   out.textContent=`Row ${r} done. Next: ${r+1}`;

@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Annomover</title>
+
+<script src="pdf-lib.min.js"></script>
+
+<style>
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+    background: #f5f6fa;
+    color: #222;
+    text-align: center;
+    padding: 30px;
+  }
+
+  h1 {
+    color: #333;
+  }
+
+  .drop-zone-container {
+    display: flex;
+    justify-content: center;
+    gap: 40px;
+    margin: 40px auto;
+    flex-wrap: wrap;
+  }
+
+  .drop-zone {
+    width: 300px;
+    height: 200px;
+    border: 3px dashed #ccc;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #fff;
+    transition: all 0.3s ease;
+    cursor: pointer;
+  }
+
+  .drop-zone:hover {
+    border-color: #0078ff;
+    background: #f0f7ff;
+  }
+
+  .drop-zone.drag-over {
+    border-color: #0078ff;
+    background: #e0f0ff;
+    transform: scale(1.02);
+  }
+
+  .drop-zone.has-file {
+    border-color: #28a745;
+    background: #e8f5e9;
+  }
+
+  .drop-zone h3 {
+    margin: 0 0 10px 0;
+    color: #555;
+  }
+
+  .drop-zone p {
+    margin: 5px 0;
+    color: #888;
+    font-size: 14px;
+  }
+
+  .drop-zone .file-name {
+    margin-top: 10px;
+    font-weight: bold;
+    color: #28a745;
+    word-break: break-all;
+    padding: 0 10px;
+  }
+
+  .drop-zone input[type="file"] {
+    display: none;
+  }
+
+  .fallback-btn {
+    margin-top: 10px;
+    padding: 8px 16px;
+    background: #0078ff;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+
+  .fallback-btn:hover {
+    background: #005fd1;
+  }
+
+  #status {
+    margin: 30px auto;
+    padding: 20px;
+    max-width: 600px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    min-height: 60px;
+  }
+
+  #status.processing {
+    background: #fff3cd;
+  }
+
+  #status.success {
+    background: #d4edda;
+  }
+
+  #status.error {
+    background: #f8d7da;
+  }
+
+  #downloadBtn {
+    display: none;
+    margin: 20px auto;
+    padding: 15px 30px;
+    background: #28a745;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 18px;
+    text-decoration: none;
+  }
+
+  #downloadBtn:hover {
+    background: #218838;
+  }
+
+  .instructions {
+    margin: 30px auto;
+    padding: 20px;
+    max-width: 600px;
+    background: #e7f3ff;
+    border-radius: 8px;
+    text-align: left;
+    display: none;
+  }
+
+  .instructions h4 {
+    margin-top: 0;
+  }
+
+  .instructions ol {
+    margin-bottom: 0;
+  }
+
+  .back-link {
+    margin-top: 40px;
+  }
+
+  .back-link a {
+    color: #0078ff;
+    text-decoration: none;
+  }
+
+  .back-link a:hover {
+    text-decoration: underline;
+  }
+</style>
+</head>
+
+<body>
+
+<h1>Annomover</h1>
+<p>Extract annotations from an old PDF as an FDF file, then import into your new PDF.</p>
+
+<div class="drop-zone-container">
+  <div class="drop-zone" id="oldPdfZone">
+    <h3>📄 Old PDF with Annotations</h3>
+    <p>Drop PDF here</p>
+    <p>or</p>
+    <button class="fallback-btn" onclick="document.getElementById('oldPdfInput').click()">Select File</button>
+    <input type="file" id="oldPdfInput" accept="application/pdf">
+    <div class="file-name" id="oldPdfName"></div>
+  </div>
+</div>
+
+<div id="status">Drop or select a PDF with annotations to extract...</div>
+
+<a id="downloadBtn" href="#" download="annotations.fdf">Download FDF File</a>
+
+<div class="instructions" id="instructions">
+  <h4>How to import into your new PDF:</h4>
+  <ol>
+    <li>Open your <strong>new PDF</strong> in Adobe Acrobat</li>
+    <li>Go to <strong>Comment</strong> → <strong>Import Comments</strong> (or <strong>Tools</strong> → <strong>Comment</strong> → <strong>Import</strong>)</li>
+    <li>Select the downloaded <strong>.fdf file</strong></li>
+    <li>Click <strong>Open</strong> - annotations will be added to your PDF</li>
+    <li>Save your PDF</li>
+  </ol>
+</div>
+
+<div class="back-link">
+  <a href="Metal v34.html">← Back to Annomancer</a>
+</div>
+
+<script>
+const { PDFDocument, PDFName, PDFArray, PDFDict, PDFString, PDFHexString, PDFNumber } = PDFLib;
+
+/* Setup drop zone */
+function setupDropZone() {
+  const zone = document.getElementById('oldPdfZone');
+  const input = document.getElementById('oldPdfInput');
+  const nameDisplay = document.getElementById('oldPdfName');
+
+  /* Drag events */
+  zone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    zone.classList.add('drag-over');
+  });
+
+  zone.addEventListener('dragleave', () => {
+    zone.classList.remove('drag-over');
+  });
+
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    
+    const files = e.dataTransfer.files;
+    if (files.length > 0 && files[0].type === 'application/pdf') {
+      handleFile(files[0], zone, nameDisplay);
+    }
+  });
+
+  /* Click to select */
+  zone.addEventListener('click', (e) => {
+    if (e.target.tagName !== 'BUTTON') {
+      input.click();
+    }
+  });
+
+  /* File input change */
+  input.addEventListener('change', () => {
+    if (input.files.length > 0) {
+      handleFile(input.files[0], zone, nameDisplay);
+    }
+  });
+}
+
+function handleFile(file, zone, nameDisplay) {
+  const reader = new FileReader();
+  const status = document.getElementById('status');
+  
+  status.textContent = "Loading PDF...";
+  status.className = "processing";
+  
+  reader.onload = async (e) => {
+    const data = new Uint8Array(e.target.result);
+    
+    zone.classList.add('has-file');
+    nameDisplay.textContent = file.name;
+    
+    await extractAnnotations(data, file.name);
+  };
+  
+  reader.readAsArrayBuffer(file);
+}
+
+async function extractAnnotations(pdfData, fileName) {
+  const status = document.getElementById('status');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const instructions = document.getElementById('instructions');
+  
+  status.textContent = "Extracting annotations...";
+  status.className = "processing";
+  downloadBtn.style.display = "none";
+  instructions.style.display = "none";
+  
+  try {
+    const pdf = await PDFDocument.load(pdfData, { ignoreEncryption: true });
+    const pages = pdf.getPages();
+    
+    let allAnnotations = [];
+    let annotationCount = 0;
+    
+    /* Process each page */
+    for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
+      const page = pages[pageIdx];
+      
+      /* Get annotations array */
+      const annotsRef = page.node.get(PDFName.of('Annots'));
+      if (!annotsRef) continue;
+      
+      const annots = page.node.lookup(PDFName.of('Annots'));
+      if (!annots || !(annots instanceof PDFArray)) continue;
+      
+      /* Process each annotation */
+      for (let j = 0; j < annots.size(); j++) {
+        try {
+          const annotRef = annots.get(j);
+          const annotDict = pdf.context.lookup(annotRef);
+          
+          if (!(annotDict instanceof PDFDict)) continue;
+          
+          /* Extract annotation data */
+          const annotData = extractAnnotDict(pdf.context, annotDict, pageIdx);
+          if (annotData) {
+            allAnnotations.push(annotData);
+            annotationCount++;
+          }
+        } catch (e) {
+          console.warn('Could not extract annotation ' + j + ' on page ' + pageIdx + ':', e);
+        }
+      }
+    }
+    
+    if (annotationCount === 0) {
+      throw new Error('No annotations found in this PDF.');
+    }
+    
+    /* Generate FDF */
+    const fdfContent = generateFDF(allAnnotations);
+    
+    /* Create download */
+    const blob = new Blob([fdfContent], { type: 'application/vnd.fdf' });
+    const url = URL.createObjectURL(blob);
+    
+    const baseName = fileName.replace(/\.pdf$/i, '');
+    downloadBtn.href = url;
+    downloadBtn.download = baseName + "_annotations.fdf";
+    downloadBtn.style.display = "inline-block";
+    instructions.style.display = "block";
+    
+    status.textContent = "✓ Extracted " + annotationCount + " annotation(s)! Download the FDF file below.";
+    status.className = "success";
+    
+  } catch (error) {
+    status.textContent = "Error: " + error.message;
+    status.className = "error";
+    console.error(error);
+  }
+}
+
+function extractAnnotDict(context, annotDict, pageIdx) {
+  const annot = {
+    page: pageIdx
+  };
+  
+  /* Get subtype (required) */
+  const subtype = annotDict.get(PDFName.of('Subtype'));
+  if (!subtype) return null;
+  annot.subtype = subtype.asString().replace('/', '');
+  
+  /* Get rect (required) */
+  const rect = annotDict.get(PDFName.of('Rect'));
+  if (rect && rect instanceof PDFArray) {
+    annot.rect = [];
+    for (let i = 0; i < rect.size(); i++) {
+      const val = rect.get(i);
+      annot.rect.push(typeof val.asNumber === 'function' ? val.asNumber() : parseFloat(val.toString()));
+    }
+  } else {
+    return null;
+  }
+  
+  /* Get contents */
+  const contents = annotDict.get(PDFName.of('Contents'));
+  if (contents) {
+    annot.contents = extractString(contents);
+  }
+  
+  /* Get title/author */
+  const title = annotDict.get(PDFName.of('T'));
+  if (title) {
+    annot.title = extractString(title);
+  }
+  
+  /* Get color */
+  const color = annotDict.get(PDFName.of('C'));
+  if (color && color instanceof PDFArray) {
+    annot.color = [];
+    for (let i = 0; i < color.size(); i++) {
+      const val = color.get(i);
+      annot.color.push(typeof val.asNumber === 'function' ? val.asNumber() : parseFloat(val.toString()));
+    }
+  }
+  
+  /* Get border color (for FreeText) */
+  const bc = annotDict.get(PDFName.of('BC'));
+  if (bc && bc instanceof PDFArray) {
+    annot.borderColor = [];
+    for (let i = 0; i < bc.size(); i++) {
+      const val = bc.get(i);
+      annot.borderColor.push(typeof val.asNumber === 'function' ? val.asNumber() : parseFloat(val.toString()));
+    }
+  }
+  
+  /* Get border style */
+  const bs = annotDict.get(PDFName.of('BS'));
+  if (bs && bs instanceof PDFDict) {
+    const w = bs.get(PDFName.of('W'));
+    if (w) {
+      annot.borderWidth = typeof w.asNumber === 'function' ? w.asNumber() : parseFloat(w.toString());
+    }
+  }
+  
+  /* Get default appearance (for FreeText) */
+  const da = annotDict.get(PDFName.of('DA'));
+  if (da) {
+    annot.da = extractString(da);
+  }
+  
+  /* Get default style (for FreeText) */
+  const ds = annotDict.get(PDFName.of('DS'));
+  if (ds) {
+    annot.ds = extractString(ds);
+  }
+  
+  /* Get subject */
+  const subj = annotDict.get(PDFName.of('Subj'));
+  if (subj) {
+    annot.subject = extractString(subj);
+  }
+  
+  /* Get quadpoints (for highlights) */
+  const quadPoints = annotDict.get(PDFName.of('QuadPoints'));
+  if (quadPoints && quadPoints instanceof PDFArray) {
+    annot.quadPoints = [];
+    for (let i = 0; i < quadPoints.size(); i++) {
+      const val = quadPoints.get(i);
+      annot.quadPoints.push(typeof val.asNumber === 'function' ? val.asNumber() : parseFloat(val.toString()));
+    }
+  }
+  
+  return annot;
+}
+
+function extractString(pdfObj) {
+  if (!pdfObj) return '';
+  
+  if (typeof pdfObj.asString === 'function') {
+    return pdfObj.asString();
+  }
+  
+  if (pdfObj instanceof PDFHexString) {
+    return pdfObj.decodeText();
+  }
+  
+  if (pdfObj instanceof PDFString) {
+    return pdfObj.asString();
+  }
+  
+  return pdfObj.toString();
+}
+
+function escFDF(s) {
+  if (!s) return '';
+  return s
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)")
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[""]/g, '"')
+    .replace(/['']/g, "'")
+    .replace(/[—–]/g, "-")
+    .replace(/…/g, "...")
+    .replace(/[^\x00-\x7F]/g, "");
+}
+
+function generateFDF(annotations) {
+  let annotBlocks = [];
+  
+  for (const annot of annotations) {
+    let block = `<<
+/Type /Annot
+/Subtype /${annot.subtype}
+/Rect [${annot.rect.join(' ')}]
+/Page ${annot.page}`;
+    
+    if (annot.contents) {
+      block += `\n/Contents (${escFDF(annot.contents)})`;
+    }
+    
+    if (annot.title) {
+      block += `\n/T (${escFDF(annot.title)})`;
+    }
+    
+    if (annot.color && annot.color.length > 0) {
+      block += `\n/C [${annot.color.join(' ')}]`;
+    }
+    
+    if (annot.borderColor && annot.borderColor.length > 0) {
+      block += `\n/BC [${annot.borderColor.join(' ')}]`;
+    }
+    
+    if (annot.borderWidth !== undefined) {
+      block += `\n/BS << /W ${annot.borderWidth} >>`;
+    }
+    
+    if (annot.da) {
+      block += `\n/DA (${escFDF(annot.da)})`;
+    }
+    
+    if (annot.ds) {
+      block += `\n/DS (${escFDF(annot.ds)})`;
+    }
+    
+    if (annot.subject) {
+      block += `\n/Subj (${escFDF(annot.subject)})`;
+    }
+    
+    if (annot.quadPoints && annot.quadPoints.length > 0) {
+      block += `\n/QuadPoints [${annot.quadPoints.join(' ')}]`;
+    }
+    
+    block += `\n>>`;
+    annotBlocks.push(block);
+  }
+  
+  return `%FDF-1.2
+1 0 obj
+<< /FDF << /Annots [
+${annotBlocks.join('\n')}
+] >> >>
+endobj
+trailer
+<< /Root 1 0 R >>
+%%EOF`;
+}
+
+/* Initialize */
+setupDropZone();
+</script>
+
+</body>
+</html>
