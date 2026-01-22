@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Annomancer - Metal v38</title>
+<title>Annomancer - Metal v39</title>
 
 <script src="pdf.js"></script>
 <script src="xlsx.full.min.js"></script>
@@ -160,7 +160,7 @@
 
 <body>
 
-<div class="version-tag">Metal v38</div>
+<div class="version-tag">Metal v39</div>
 
 <h1>Annomancer</h1>
 <p>A little science. A little magic. A roll of the dice. Boom. You've got annos.</p>
@@ -313,14 +313,17 @@ function setFont(px,fam){ mctx.font=px+"px "+(fam||"sans-serif"); }
 function measure(t){ return mctx.measureText(t).width||0; }
 
 /* ================================================
-   METAL v38 - GREEDY SEQUENTIAL SEARCH ENGINE
+   METAL v39 - GREEDY SEQUENTIAL SEARCH ENGINE
    Supports up to 600 words with up to 12 line breaks
    Position-aware: segments must be sequential in PDF
    Strict proximity: max 4x line height gap, max 25 lines total
    Gap validation: only whitespace allowed between segments
    Column A: line breaks stripped for searching
    Column C: line breaks preserved in FDF comments
-   Column E: "Shortened claim" rows skipped (subsets of Full claim)
+   Column E: Full/Shortened claim logic with fallback
+     - Full claim found → process, skip subsequent shortened
+     - Full claim NOT found → try next shortened as fallback
+     - Empty → process normally, reset skip state
    Cloud: Projects loaded from SheetsDropdown.txt
    ================================================ */
 async function extractMatches(pdfData, term){
@@ -775,6 +778,7 @@ async function runAutomation(){
   cumulativeAnnots=[];
   let rowNum=2;
   let skippedRows=0;
+  let skipShortenedClaims=false; /* Track if we should skip Shortened claims */
 
   autoBtn.disabled=true;
   autoBtn.style.background="#cc0000";
@@ -802,16 +806,56 @@ async function runAutomation(){
       break;
     }
 
-    /* Skip "Shortened claim" rows - they are subsets of preceding Full claim */
-    if(claimType === "shortened claim"){
-      out.textContent=`Row ${rowNum} skipped (Shortened claim)...`;
-      skippedRows++;
+    const term = stripLineBreaks(rawTerm.toString());
+
+    /* Handle based on column E value */
+    if(claimType === "full claim"){
+      /* Full claim: try to process it */
+      const matches=await extractMatches(new Uint8Array(pdfArray), term);
+      
+      if(matches.length > 0){
+        /* Full claim found in PDF - process it and skip subsequent shortened claims */
+        if (debugMode) {
+          await render(new Uint8Array(pdfArray), matches, borderHex);
+        }
+        const blocks=generateAnnotBlocks(matches, comment||"", borderHex, textHex);
+        cumulativeAnnots.push(blocks);
+        out.textContent=`Row ${rowNum} processed (Full claim found)...`;
+        skipShortenedClaims = true; /* Skip subsequent shortened claims */
+      } else {
+        /* Full claim NOT found - allow next shortened claim as fallback */
+        out.textContent=`Row ${rowNum} not found (Full claim), will try shortened...`;
+        skipShortenedClaims = false; /* Allow next shortened claim */
+      }
       rowNum++;
       continue;
     }
+    
+    if(claimType === "shortened claim"){
+      if(skipShortenedClaims){
+        /* We're in skip mode - skip this shortened claim */
+        out.textContent=`Row ${rowNum} skipped (Shortened claim)...`;
+        skippedRows++;
+        rowNum++;
+        continue;
+      } else {
+        /* Not in skip mode - process this shortened claim as fallback, then start skipping */
+        const matches=await extractMatches(new Uint8Array(pdfArray), term);
+        if (debugMode) {
+          await render(new Uint8Array(pdfArray), matches, borderHex);
+        }
+        const blocks=generateAnnotBlocks(matches, comment||"", borderHex, textHex);
+        cumulativeAnnots.push(blocks);
+        out.textContent=`Row ${rowNum} processed (Shortened claim fallback)...`;
+        skipShortenedClaims = true; /* Skip remaining shortened claims */
+        rowNum++;
+        continue;
+      }
+    }
 
-    /* Process normally for empty column E or "Full claim" */
-    const term = stripLineBreaks(rawTerm.toString());
+    /* Empty column E - process normally and reset skip state */
+    skipShortenedClaims = false; /* Reset - no longer skipping */
+    
     const matches=await extractMatches(new Uint8Array(pdfArray), term);
     if (debugMode) {
       await render(new Uint8Array(pdfArray), matches, borderHex);
