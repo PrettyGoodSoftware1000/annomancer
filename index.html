@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Annomancer - Metal v34</title>
+<title>Annomancer - Metal v35</title>
 
 <script src="pdf.js"></script>
 <script src="xlsx.full.min.js"></script>
@@ -141,7 +141,7 @@
 
 <body>
 
-<h1>Annomancer (Metal v34)</h1>
+<h1>Annomancer (Metal v35)</h1>
 <p>A little science. A little magic. A roll of the dice. Boom. You've got annos.</p>
 
 <div id="passwordSection">
@@ -154,11 +154,12 @@
 <div id="protectedContent" class="protected-content">
 <div class="leftControls">
   <label><b>Project:</b></label>
-  <select id="projectSelect" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px;">
-    <option value="edwards_patient" selected>Edwards Patient</option>
-    <option value="edwards_hcp">Edwards HCP</option>
-    <option value="wainua_patient">Wainua Patient</option>
-  </select>
+  <div style="display: flex; gap: 8px; align-items: center;">
+    <select id="projectSelect" style="padding: 8px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px;">
+      <option value="">Loading...</option>
+    </select>
+    <button id="openSpreadsheetBtn" style="padding: 8px 12px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">Open Spreadsheet</button>
+  </div>
 
   <label><b>Border Color:</b></label>
   <input type="color" id="borderPicker" value="#FF0000">
@@ -291,13 +292,13 @@ function setFont(px,fam){ mctx.font=px+"px "+(fam||"sans-serif"); }
 function measure(t){ return mctx.measureText(t).width||0; }
 
 /* ================================================
-   METAL v34 - GREEDY SEQUENTIAL SEARCH ENGINE
+   METAL v35 - GREEDY SEQUENTIAL SEARCH ENGINE
    Supports up to 600 words with up to 12 line breaks
    Position-aware: segments must be sequential in PDF
    Strict proximity: max 4x line height gap, max 25 lines total
    Column A: line breaks stripped for searching
    Column C: line breaks preserved in FDF comments
-   Cloud: Project dropdown + 1-click download via UniqueId
+   Cloud: Projects loaded from SheetsDropdown.txt
    ================================================ */
 async function extractMatches(pdfData, term){
   const pdf = await pdfjsLib.getDocument({data: pdfData}).promise;
@@ -882,11 +883,71 @@ document.addEventListener("DOMContentLoaded", function() {
   }
 });
 
-// Project configuration - SharePoint UniqueId download URLs
-const PROJECT_URLS = {
-  edwards_patient: "https://interpublic-my.sharepoint.com/personal/mark_habke_fcbcure_com/_layouts/15/download.aspx?UniqueId=697c6e2d-1831-46e2-ae85-3bef83f3bd2c",
-  edwards_hcp: "", // TODO: Add URL when available
-  wainua_patient: ""  // TODO: Add URL when available
+// Project configuration - loaded from SheetsDropdown.txt
+let PROJECT_URLS = {};
+
+// Load project configuration from external file
+async function loadProjectConfig() {
+  try {
+    const response = await fetch('SheetsDropdown.txt');
+    if (!response.ok) {
+      throw new Error('Could not load SheetsDropdown.txt');
+    }
+    const text = await response.text();
+    const lines = text.trim().split('\n');
+    
+    const select = document.getElementById('projectSelect');
+    select.innerHTML = ''; // Clear loading option
+    
+    PROJECT_URLS = {};
+    
+    lines.forEach((line, index) => {
+      const colonIndex = line.indexOf(':');
+      if (colonIndex > 0) {
+        const name = line.substring(0, colonIndex).trim();
+        const url = line.substring(colonIndex + 1).trim();
+        
+        if (name && url) {
+          PROJECT_URLS[name] = url;
+          
+          const option = document.createElement('option');
+          option.value = name;
+          option.textContent = name;
+          if (index === 0) option.selected = true;
+          select.appendChild(option);
+        }
+      }
+    });
+    
+    if (Object.keys(PROJECT_URLS).length === 0) {
+      select.innerHTML = '<option value="">No projects configured</option>';
+    }
+    
+  } catch (error) {
+    console.error('Error loading project config:', error);
+    const select = document.getElementById('projectSelect');
+    select.innerHTML = '<option value="">Error loading projects</option>';
+    document.getElementById('spreadsheetStatus').textContent = '⚠️ Could not load SheetsDropdown.txt';
+    document.getElementById('spreadsheetStatus').style.color = '#cc0000';
+  }
+}
+
+// Load config on page load
+loadProjectConfig();
+
+// Open Spreadsheet button - opens original URL in new tab
+document.getElementById("openSpreadsheetBtn").onclick = function() {
+  const projectSelect = document.getElementById("projectSelect");
+  const selectedProject = projectSelect.value;
+  const status = document.getElementById("spreadsheetStatus");
+  
+  if (!selectedProject || !PROJECT_URLS[selectedProject]) {
+    status.textContent = "⚠️ No project selected or URL not configured";
+    status.style.color = "#cc0000";
+    return;
+  }
+  
+  window.open(PROJECT_URLS[selectedProject], '_blank');
 };
 
 // Save URL when it changes (for debug mode custom URLs)
@@ -913,17 +974,19 @@ document.getElementById("downloadLatestBtn").onclick = function() {
   let downloadUrl;
   
   if (customUrl) {
-    // Use custom URL from debug field - convert to Method 4 format if needed
+    // Use custom URL from debug field - convert to Method 4 format
     downloadUrl = convertToDownloadUrl(customUrl);
   } else {
-    // Use project URL
-    downloadUrl = PROJECT_URLS[selectedProject];
+    // Use project URL from config
+    const originalUrl = PROJECT_URLS[selectedProject];
     
-    if (!downloadUrl) {
-      status.textContent = "⚠️ URL not configured for this project yet";
+    if (!originalUrl) {
+      status.textContent = "⚠️ No project selected or URL not configured";
       status.style.color = "#cc0000";
       return;
     }
+    
+    downloadUrl = convertToDownloadUrl(originalUrl);
   }
   
   // Create a hidden anchor and click it to trigger download
