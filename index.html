@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Annomancer - Metal v37</title>
+<title>Annomancer - Metal v38</title>
 
 <script src="pdf.js"></script>
 <script src="xlsx.full.min.js"></script>
@@ -160,7 +160,7 @@
 
 <body>
 
-<div class="version-tag">Metal v37</div>
+<div class="version-tag">Metal v38</div>
 
 <h1>Annomancer</h1>
 <p>A little science. A little magic. A roll of the dice. Boom. You've got annos.</p>
@@ -313,10 +313,11 @@ function setFont(px,fam){ mctx.font=px+"px "+(fam||"sans-serif"); }
 function measure(t){ return mctx.measureText(t).width||0; }
 
 /* ================================================
-   METAL v37 - GREEDY SEQUENTIAL SEARCH ENGINE
+   METAL v38 - GREEDY SEQUENTIAL SEARCH ENGINE
    Supports up to 600 words with up to 12 line breaks
    Position-aware: segments must be sequential in PDF
    Strict proximity: max 4x line height gap, max 25 lines total
+   Gap validation: only whitespace allowed between segments
    Column A: line breaks stripped for searching
    Column C: line breaks preserved in FDF comments
    Column E: "Shortened claim" rows skipped (subsets of Full claim)
@@ -349,7 +350,7 @@ async function extractMatches(pdfData, term){
     const merged = chars.map(c => c.ch).join("");
     const mergedLower = merged.toLowerCase();
 
-    /* literal block finder - returns box AND end position in merged text */
+    /* literal block finder - returns box AND start/end position in merged text */
     function findLiteralBox(needle, startFrom = 0) {
       if (!needle) return null;
       const nl = needle.toLowerCase();
@@ -397,6 +398,7 @@ async function extractMatches(pdfData, term){
           w: maxRight - minLeft,
           h: maxTop - minBot
         },
+        startPos: pos,  /* position where this match starts */
         endPos: end + 1 /* position to start next search from */
       };
     }
@@ -469,12 +471,20 @@ async function extractMatches(pdfData, term){
       return true;
     }
 
+    /* Check if text between two positions is only whitespace */
+    function isOnlyWhitespace(startPos, endPos) {
+      if (startPos >= endPos) return true;
+      const between = merged.substring(startPos, endPos);
+      return /^\s*$/.test(between);
+    }
+
     /* Greedy sequential: find longest match from current position, then continue */
     function findGreedySegments(searchText) {
       const segments = [];
       const words = searchText.split(/\s+/);
       let wordIndex = 0;
       let searchPos = 0; /* Position in merged PDF text - ensures sequential matches */
+      let lastEndPos = 0; /* Track where last segment ended */
 
       while (wordIndex < words.length && segments.length < MAX_SEGMENTS) {
         let found = false;
@@ -485,7 +495,15 @@ async function extractMatches(pdfData, term){
           const result = findLiteralBox(candidate, searchPos);
 
           if (result) {
+            /* CRITICAL: Check that there's no extra text between segments */
+            /* Text between lastEndPos and result.startPos should be whitespace only */
+            if (segments.length > 0 && !isOnlyWhitespace(lastEndPos, result.startPos)) {
+              /* There's extra text between segments - try a smaller match */
+              continue;
+            }
+
             segments.push(result.box);
+            lastEndPos = result.endPos; /* Track where this segment ended */
             searchPos = result.endPos; /* Next search starts after this match */
             wordIndex = endIdx; /* Move past matched words */
             found = true;
