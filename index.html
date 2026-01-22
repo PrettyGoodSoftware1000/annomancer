@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Annomancer - Metal v36</title>
+<title>Annomancer - Metal v37</title>
 
 <script src="pdf.js"></script>
 <script src="xlsx.full.min.js"></script>
@@ -160,7 +160,7 @@
 
 <body>
 
-<div class="version-tag">Metal v36</div>
+<div class="version-tag">Metal v37</div>
 
 <h1>Annomancer</h1>
 <p>A little science. A little magic. A roll of the dice. Boom. You've got annos.</p>
@@ -313,12 +313,13 @@ function setFont(px,fam){ mctx.font=px+"px "+(fam||"sans-serif"); }
 function measure(t){ return mctx.measureText(t).width||0; }
 
 /* ================================================
-   METAL v36 - GREEDY SEQUENTIAL SEARCH ENGINE
+   METAL v37 - GREEDY SEQUENTIAL SEARCH ENGINE
    Supports up to 600 words with up to 12 line breaks
    Position-aware: segments must be sequential in PDF
    Strict proximity: max 4x line height gap, max 25 lines total
    Column A: line breaks stripped for searching
    Column C: line breaks preserved in FDF comments
+   Column E: "Shortened claim" rows skipped (subsets of Full claim)
    Cloud: Projects loaded from SheetsDropdown.txt
    ================================================ */
 async function extractMatches(pdfData, term){
@@ -755,6 +756,7 @@ async function runAutomation(){
   automationRunning=true;
   cumulativeAnnots=[];
   let rowNum=2;
+  let skippedRows=0;
 
   autoBtn.disabled=true;
   autoBtn.style.background="#cc0000";
@@ -776,11 +778,21 @@ async function runAutomation(){
 
     const rawTerm=row[0];
     const comment=row[2];
+    const claimType=row[4] ? row[4].toString().trim().toLowerCase() : "";
 
     if(!rawTerm){
       break;
     }
 
+    /* Skip "Shortened claim" rows - they are subsets of preceding Full claim */
+    if(claimType === "shortened claim"){
+      out.textContent=`Row ${rowNum} skipped (Shortened claim)...`;
+      skippedRows++;
+      rowNum++;
+      continue;
+    }
+
+    /* Process normally for empty column E or "Full claim" */
     const term = stripLineBreaks(rawTerm.toString());
     const matches=await extractMatches(new Uint8Array(pdfArray), term);
     if (debugMode) {
@@ -795,7 +807,7 @@ async function runAutomation(){
   }
 
   if(cumulativeAnnots.length===0){
-    out.textContent="No annotations accumulated.";
+    out.textContent="No annotations accumulated." + (skippedRows > 0 ? ` (${skippedRows} shortened claims skipped)` : "");
 
     autoBtn.disabled=false;
     autoBtn.style.background="#0078ff";
@@ -854,8 +866,10 @@ trailer
 
   const drawnCard = viscontiTarot[Math.floor(Math.random() * viscontiTarot.length)];
 
+  const skippedText = skippedRows > 0 ? `<br><span style="color:#666; font-size:12px;">(${skippedRows} shortened claim${skippedRows > 1 ? 's' : ''} skipped)</span>` : "";
+
   out.innerHTML=
-    `Your annos have been 'tated. Import this onto your pdf.<br>
+    `Your annos have been 'tated. Import this onto your pdf.${skippedText}<br>
 <a href="${url}" download="${finalName}">Download your annos</a><br><br>
 You also rolled a ${d20Roll} on a 20-sided die${critText} and drawn the ${drawnCard.name}:<br>
 <img src="${drawnCard.img}" alt="${drawnCard.name}" style="max-width:200px; margin-top:10px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.2);">`;
