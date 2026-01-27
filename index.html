@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Annomancer - Metal v42</title>
+<title>Annomancer - Metal v43</title>
 
 <script src="pdf.js"></script>
 <script src="xlsx.full.min.js"></script>
@@ -160,7 +160,7 @@
 
 <body>
 
-<div class="version-tag">Metal v42</div>
+<div class="version-tag">Metal v43</div>
 
 <img src="masthead.png" alt="Annomancer" style="max-width: 100%; width: 768px; height: auto; margin-bottom: 10px;">
 <p>A little science. A little magic. A roll of the dice. Boom. You've got annos.</p>
@@ -986,7 +986,8 @@ let PROJECT_URLS = {};
 // Load project configuration from external file
 async function loadProjectConfig() {
   try {
-    const response = await fetch('SheetsDropdown.txt');
+    // Add cache-busting timestamp to always load fresh copy
+    const response = await fetch('SheetsDropdown.txt?t=' + Date.now());
     if (!response.ok) {
       throw new Error('Could not load SheetsDropdown.txt');
     }
