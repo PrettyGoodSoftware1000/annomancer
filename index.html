@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Annomancer - Metal v43</title>
+<title>Annomancer - Metal v44</title>
 
 <script src="pdf.js"></script>
 <script src="xlsx.full.min.js"></script>
@@ -160,7 +160,7 @@
 
 <body>
 
-<div class="version-tag">Metal v43</div>
+<div class="version-tag">Metal v44</div>
 
 <img src="masthead.png" alt="Annomancer" style="max-width: 100%; width: 768px; height: auto; margin-bottom: 10px;">
 <p>A little science. A little magic. A roll of the dice. Boom. You've got annos.</p>
@@ -313,7 +313,7 @@ function setFont(px,fam){ mctx.font=px+"px "+(fam||"sans-serif"); }
 function measure(t){ return mctx.measureText(t).width||0; }
 
 /* ================================================
-   METAL v40 - GREEDY SEQUENTIAL SEARCH ENGINE
+   METAL v44 - GREEDY SEQUENTIAL SEARCH ENGINE
    Supports up to 600 words with up to 12 line breaks
    Position-aware: segments must be sequential in PDF
    Strict proximity: max 4x line height gap, max 25 lines total
@@ -324,15 +324,25 @@ function measure(t){ return mctx.measureText(t).width||0; }
      - Full claim found → process, skip subsequent shortened
      - Full claim NOT found → try next shortened as fallback
      - Empty → process normally, reset skip state
+   Abbreviation mode: If A1="Abbreviation", require word boundaries
    Cloud: Projects loaded from SheetsDropdown.txt
    ================================================ */
-async function extractMatches(pdfData, term){
+async function extractMatches(pdfData, term, abbreviationMode = false){
   const pdf = await pdfjsLib.getDocument({data: pdfData}).promise;
   const out = [];
   const search = term.trim();
   if (!search) return out;
 
   const MAX_SEGMENTS = 13; /* 12 line breaks = 13 segments max */
+  
+  /* Characters that count as word boundaries (whitespace or punctuation) */
+  const WORD_BOUNDARY_REGEX = /[\s\.,;:!?\-–—\(\)\[\]{}'"\/\\<>@#$%^&*+=|~`]/;
+  
+  /* Check if a character is a word boundary */
+  function isWordBoundary(char) {
+    if (!char) return true; /* Start/end of string counts as boundary */
+    return WORD_BOUNDARY_REGEX.test(char);
+  }
 
   /* process each page */
   for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
@@ -358,52 +368,70 @@ async function extractMatches(pdfData, term){
       if (!needle) return null;
       const nl = needle.toLowerCase();
 
-      let pos = mergedLower.indexOf(nl, startFrom);
-      if (pos === -1) return null;
+      let pos = startFrom;
+      
+      /* Keep searching until we find a valid match or run out of text */
+      while (true) {
+        pos = mergedLower.indexOf(nl, pos);
+        if (pos === -1) return null;
 
-      let end = pos + needle.length - 1;
-      if (end >= chars.length) return null;
+        let end = pos + needle.length - 1;
+        if (end >= chars.length) return null;
+        
+        /* Abbreviation mode: check word boundaries */
+        if (abbreviationMode) {
+          const charBefore = pos > 0 ? merged[pos - 1] : null;
+          const charAfter = end + 1 < merged.length ? merged[end + 1] : null;
+          
+          /* Must have word boundary before and after */
+          if (!isWordBoundary(charBefore) || !isWordBoundary(charAfter)) {
+            /* Not a valid word boundary match, keep searching */
+            pos++;
+            continue;
+          }
+        }
 
-      let minLeft = Infinity, maxRight = -Infinity;
-      let minBot = Infinity, maxTop = -Infinity;
+        let minLeft = Infinity, maxRight = -Infinity;
+        let minBot = Infinity, maxTop = -Infinity;
 
-      for (let c = pos; c <= end; c++) {
-        const ch = chars[c];
-        const T = ch.T;
-        const item = ch.item;
+        for (let c = pos; c <= end; c++) {
+          const ch = chars[c];
+          const T = ch.T;
+          const item = ch.item;
 
-        const runW = item.width || 0;
-        const runLen = item.str.length || 1;
-        const charW = runW / runLen;
+          const runW = item.width || 0;
+          const runLen = item.str.length || 1;
+          const charW = runW / runLen;
 
-        const h = Math.hypot(T[2], T[3]) || Math.abs(T[3]) || 10;
-        const yTop = T[5] + h * (1 + TOPOS);
-        const yBot = T[5] - h * DESC;
+          const h = Math.hypot(T[2], T[3]) || Math.abs(T[3]) || 10;
+          const yTop = T[5] + h * (1 + TOPOS);
+          const yBot = T[5] - h * DESC;
 
-        const left = T[4] + charW * ch.offset;
-        const right = left + charW;
+          const left = T[4] + charW * ch.offset;
+          const right = left + charW;
 
-        if (left < minLeft) minLeft = left;
-        if (right > maxRight) maxRight = right;
-        if (yTop > maxTop) maxTop = yTop;
-        if (yBot < minBot) minBot = yBot;
+          if (left < minLeft) minLeft = left;
+          if (right > maxRight) maxRight = right;
+          if (yTop > maxTop) maxTop = yTop;
+          if (yBot < minBot) minBot = yBot;
+        }
+
+        minLeft -= LEFT_PAD;
+        maxRight += RIGHT_PAD;
+
+        return {
+          box: {
+            pageNum,
+            x: minLeft,
+            yTop: maxTop,
+            yBottom: minBot,
+            w: maxRight - minLeft,
+            h: maxTop - minBot
+          },
+          startPos: pos,  /* position where this match starts */
+          endPos: end + 1 /* position to start next search from */
+        };
       }
-
-      minLeft -= LEFT_PAD;
-      maxRight += RIGHT_PAD;
-
-      return {
-        box: {
-          pageNum,
-          x: minLeft,
-          yTop: maxTop,
-          yBottom: minBot,
-          w: maxRight - minLeft,
-          h: maxTop - minBot
-        },
-        startPos: pos,  /* position where this match starts */
-        endPos: end + 1 /* position to start next search from */
-      };
     }
 
     /* Check if boxes are within reasonable proximity of each other */
@@ -792,6 +820,13 @@ async function runAutomation(){
   const sheet=wb.Sheets[wb.SheetNames[0]];
   const rows=XLSX.utils.sheet_to_json(sheet,{header:1})||[];
 
+  /* Check if A1 contains "Abbreviation" to enable abbreviation mode */
+  const cellA1 = rows[0] && rows[0][0] ? rows[0][0].toString().trim().toLowerCase() : "";
+  const abbreviationMode = cellA1 === "abbreviation";
+  if (abbreviationMode) {
+    out.textContent = "Abbreviation mode enabled...";
+  }
+
   const pdfArray=await pdfFile.arrayBuffer();
 
   while(true){
@@ -811,7 +846,7 @@ async function runAutomation(){
     /* Handle based on column E value */
     if(claimType === "full claim"){
       /* Full claim: try to process it */
-      const matches=await extractMatches(new Uint8Array(pdfArray), term);
+      const matches=await extractMatches(new Uint8Array(pdfArray), term, abbreviationMode);
       
       if(matches.length > 0){
         /* Full claim found in PDF - process it and skip subsequent shortened claims */
@@ -840,7 +875,7 @@ async function runAutomation(){
         continue;
       } else {
         /* Not in skip mode - process this shortened claim as fallback, then start skipping */
-        const matches=await extractMatches(new Uint8Array(pdfArray), term);
+        const matches=await extractMatches(new Uint8Array(pdfArray), term, abbreviationMode);
         if (debugMode) {
           await render(new Uint8Array(pdfArray), matches, borderHex);
         }
@@ -856,7 +891,7 @@ async function runAutomation(){
     /* Empty column E - process normally and reset skip state */
     skipShortenedClaims = false; /* Reset - no longer skipping */
     
-    const matches=await extractMatches(new Uint8Array(pdfArray), term);
+    const matches=await extractMatches(new Uint8Array(pdfArray), term, abbreviationMode);
     if (debugMode) {
       await render(new Uint8Array(pdfArray), matches, borderHex);
     }
@@ -1172,6 +1207,10 @@ async function runStepOnce(r){
   const sheet=wb.Sheets[wb.SheetNames[0]];
   const rows=XLSX.utils.sheet_to_json(sheet,{header:1})||[];
 
+  /* Check if A1 contains "Abbreviation" to enable abbreviation mode */
+  const cellA1 = rows[0] && rows[0][0] ? rows[0][0].toString().trim().toLowerCase() : "";
+  const abbreviationMode = cellA1 === "abbreviation";
+
   const idx=r-1;
   const row=rows[idx]||[];
 
@@ -1185,10 +1224,10 @@ async function runStepOnce(r){
 
   const term = stripLineBreaks(rawTerm.toString());
   const pdfArray=await pdfFile.arrayBuffer();
-  const matches=await extractMatches(new Uint8Array(pdfArray), term);
+  const matches=await extractMatches(new Uint8Array(pdfArray), term, abbreviationMode);
   await render(new Uint8Array(pdfArray), matches, borderHex);
 
-  out.textContent=`Row ${r} done. Next: ${r+1}`;
+  out.textContent=`Row ${r} done. Next: ${r+1}` + (abbreviationMode ? " (Abbrev mode)" : "");
   document.getElementById("rowInput").value=r+1;
 }
 </script>
