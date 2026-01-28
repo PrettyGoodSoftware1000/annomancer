@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Annomancer - Metal v44</title>
+<title>Annomancer - Metal v45</title>
 
 <script src="pdf.js"></script>
 <script src="xlsx.full.min.js"></script>
@@ -160,7 +160,7 @@
 
 <body>
 
-<div class="version-tag">Metal v44</div>
+<div class="version-tag">Metal v45</div>
 
 <img src="masthead.png" alt="Annomancer" style="max-width: 100%; width: 768px; height: auto; margin-bottom: 10px;">
 <p>A little science. A little magic. A roll of the dice. Boom. You've got annos.</p>
@@ -313,11 +313,12 @@ function setFont(px,fam){ mctx.font=px+"px "+(fam||"sans-serif"); }
 function measure(t){ return mctx.measureText(t).width||0; }
 
 /* ================================================
-   METAL v44 - GREEDY SEQUENTIAL SEARCH ENGINE
+   METAL v45 - GREEDY SEQUENTIAL SEARCH ENGINE
    Supports up to 600 words with up to 12 line breaks
    Position-aware: segments must be sequential in PDF
    Strict proximity: max 4x line height gap, max 25 lines total
    Gap validation: only whitespace allowed between segments
+   Multiple matches: finds ALL occurrences on each page
    Column A: line breaks stripped for searching
    Column C: line breaks preserved in FDF comments
    Column E: Full/Shortened claim logic with fallback
@@ -510,12 +511,14 @@ async function extractMatches(pdfData, term, abbreviationMode = false){
     }
 
     /* Greedy sequential: find longest match from current position, then continue */
-    function findGreedySegments(searchText) {
+    /* Returns { segments: [...boxes], endPos: number, firstMatchPos: number } or { firstMatchPos: number } if partial match, or null if no match at all */
+    function findGreedySegments(searchText, startFrom = 0) {
       const segments = [];
       const words = searchText.split(/\s+/);
       let wordIndex = 0;
-      let searchPos = 0; /* Position in merged PDF text - ensures sequential matches */
-      let lastEndPos = 0; /* Track where last segment ended */
+      let searchPos = startFrom; /* Position in merged PDF text - ensures sequential matches */
+      let lastEndPos = startFrom; /* Track where last segment ended */
+      let firstMatchPos = -1; /* Track where first segment started */
 
       while (wordIndex < words.length && segments.length < MAX_SEGMENTS) {
         let found = false;
@@ -533,6 +536,11 @@ async function extractMatches(pdfData, term, abbreviationMode = false){
               continue;
             }
 
+            /* Track where first match started */
+            if (firstMatchPos === -1) {
+              firstMatchPos = result.startPos;
+            }
+
             segments.push(result.box);
             lastEndPos = result.endPos; /* Track where this segment ended */
             searchPos = result.endPos; /* Next search starts after this match */
@@ -542,55 +550,88 @@ async function extractMatches(pdfData, term, abbreviationMode = false){
           }
         }
 
-        /* If even a single word isn't found at this position, fail completely */
+        /* If even a single word isn't found at this position, fail */
         if (!found) {
-          return []; /* Return empty - require complete match */
+          /* Return where we started so caller can try from next position */
+          if (firstMatchPos !== -1) {
+            return { segments: null, firstMatchPos };
+          }
+          return null; /* No match found at all from this position */
         }
       }
 
       /* Only return segments if ALL words were matched */
       if (wordIndex < words.length) {
-        return []; /* Incomplete match */
+        return { segments: null, firstMatchPos };
       }
 
-      return segments;
+      return { segments, endPos: lastEndPos, firstMatchPos };
     }
 
-    /* Try literal match first - best case */
-    const literalResult = findLiteralBox(search, 0);
-    if (literalResult) {
+    /* Find ALL literal matches on this page */
+    let literalSearchPos = 0;
+    let foundLiteral = false;
+    
+    while (true) {
+      const literalResult = findLiteralBox(search, literalSearchPos);
+      if (!literalResult) break;
+      
       out.push(literalResult.box);
-      continue;
+      foundLiteral = true;
+      literalSearchPos = literalResult.endPos;
     }
+    
+    /* If we found literal matches, move to next page */
+    if (foundLiteral) continue;
 
-    /* Use greedy sequential matching */
-    const segments = findGreedySegments(search);
+    /* No literal matches - try to find ALL greedy sequential matches on this page */
+    let greedySearchPos = 0;
+    
+    while (true) {
+      const greedyResult = findGreedySegments(search, greedySearchPos);
+      
+      /* No match found at all from this position */
+      if (!greedyResult) break;
+      
+      /* Partial match - first word found but couldn't complete */
+      /* Try again from after the first match position */
+      if (!greedyResult.segments) {
+        greedySearchPos = greedyResult.firstMatchPos + 1;
+        continue;
+      }
+      
+      const segments = greedyResult.segments;
+      
+      /* Proximity check: reject if boxes are too far apart */
+      if (!boxesAreProximate(segments)) {
+        /* Skip this match but keep searching after it */
+        greedySearchPos = greedyResult.endPos;
+        continue;
+      }
 
-    /* Skip if no complete match found */
-    if (segments.length === 0) continue;
+      /* Merge all segment boxes into one */
+      let minLeft = Infinity, maxRight = -Infinity;
+      let minBot = Infinity, maxTop = -Infinity;
 
-    /* Proximity check: reject if boxes are too far apart */
-    if (!boxesAreProximate(segments)) continue;
+      for (const b of segments) {
+        if (b.x < minLeft) minLeft = b.x;
+        if (b.x + b.w > maxRight) maxRight = b.x + b.w;
+        if (b.yBottom < minBot) minBot = b.yBottom;
+        if (b.yTop > maxTop) maxTop = b.yTop;
+      }
 
-    /* Merge all segment boxes into one */
-    let minLeft = Infinity, maxRight = -Infinity;
-    let minBot = Infinity, maxTop = -Infinity;
-
-    for (const b of segments) {
-      if (b.x < minLeft) minLeft = b.x;
-      if (b.x + b.w > maxRight) maxRight = b.x + b.w;
-      if (b.yBottom < minBot) minBot = b.yBottom;
-      if (b.yTop > maxTop) maxTop = b.yTop;
+      out.push({
+        pageNum,
+        x: minLeft,
+        yTop: maxTop,
+        yBottom: minBot,
+        w: maxRight - minLeft,
+        h: maxTop - minBot
+      });
+      
+      /* Continue searching after this match */
+      greedySearchPos = greedyResult.endPos;
     }
-
-    out.push({
-      pageNum,
-      x: minLeft,
-      yTop: maxTop,
-      yBottom: minBot,
-      w: maxRight - minLeft,
-      h: maxTop - minBot
-    });
   }
 
   return out;
