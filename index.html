@@ -682,8 +682,9 @@ function hexToRgbFloats(hex){
 }
 
 function generateAnnotBlocks(matches, commentText, borderHex, textHex){
-  const comment=escComment((commentText||"").trim());
-  const EXP=1.5, GAP=0.5, CH=55;
+  const rawComment=(commentText||"").trim();
+  const comment=escComment(rawComment);
+  const PAGE_WIDTH=612; /* Standard US letter width in points */
   const BORDER=hexToRgbFloats(borderHex);
   const TEXT=hexToRgbFloats(textHex);
 
@@ -706,10 +707,61 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex){
 
     if(!comment) return square;
 
-    const cw=m.w*EXP;
-    const l=x1, r=l+cw;
-    const t=y1-GAP;
-    const b=t-CH;
+    /* === Dynamic text box sizing based on character count === */
+    const charCount=rawComment.length;
+    const CHAR_W=5.5;   /* approx width per char at 10pt Arial */
+    const LINE_H=13;    /* line height at 10pt */
+    const PAD=6;         /* padding inside the text box */
+
+    let boxW, boxH;
+    if(charCount<=25){
+      /* Short text: single line */
+      boxW=charCount*CHAR_W+PAD*2;
+      boxH=LINE_H+PAD*2;
+    } else if(charCount<=80){
+      /* Medium text: moderate width, multi-line */
+      boxW=120;
+      const cpl=Math.floor((boxW-PAD*2)/CHAR_W);
+      const lines=Math.ceil(charCount/cpl);
+      boxH=lines*LINE_H+PAD*2;
+    } else if(charCount<=200){
+      /* Longer text: wider box */
+      boxW=160;
+      const cpl=Math.floor((boxW-PAD*2)/CHAR_W);
+      const lines=Math.ceil(charCount/cpl);
+      boxH=lines*LINE_H+PAD*2;
+    } else {
+      /* Very long text: widest box */
+      boxW=200;
+      const cpl=Math.floor((boxW-PAD*2)/CHAR_W);
+      const lines=Math.ceil(charCount/cpl);
+      boxH=lines*LINE_H+PAD*2;
+    }
+
+    /* Enforce minimum sizes */
+    boxW=Math.max(40,boxW);
+    boxH=Math.max(22,boxH);
+
+    /* === Position: left half → text box to the LEFT, right half → to the RIGHT === */
+    const boxCenter=(x1+x2)/2;
+    const GAP=3;
+    let l, r, t, b;
+
+    if(boxCenter<PAGE_WIDTH/2){
+      /* Left half of page: place text box to the LEFT of the square */
+      r=x1-GAP;
+      l=r-boxW;
+      if(l<2){ l=2; boxW=r-l; }
+    } else {
+      /* Right half of page: place text box to the RIGHT of the square */
+      l=x2+GAP;
+      r=l+boxW;
+      if(r>PAGE_WIDTH-2){ r=PAGE_WIDTH-2; boxW=r-l; }
+    }
+
+    /* Vertically align top of text box with top of square */
+    t=y2;
+    b=t-boxH;
 
     const freeText=
 `<<
@@ -847,6 +899,7 @@ async function runAutomation(){
   cumulativeAnnots=[];
   let rowNum=2;
   let skippedRows=0;
+  let consecutiveEmpty=0; /* Track consecutive empty cells in column A */
   let skipShortenedClaims=false; /* Track if we should skip Shortened claims */
 
   autoBtn.disabled=true;
@@ -879,8 +932,15 @@ async function runAutomation(){
     const claimType=row[4] ? row[4].toString().trim().toLowerCase() : "";
 
     if(!rawTerm){
-      break;
+      consecutiveEmpty++;
+      if(consecutiveEmpty>=10){
+        break; /* 10 consecutive empty cells in column A → stop */
+      }
+      rowNum++;
+      continue;
     }
+
+    consecutiveEmpty=0; /* Reset when non-empty cell found */
 
     const term = stripLineBreaks(rawTerm.toString());
 
