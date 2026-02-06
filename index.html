@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Annomancer - Metal v45</title>
+<title>Annomancer - Metal v45-FB</title>
 
 <script src="pdf.js"></script>
 <script src="xlsx.full.min.js"></script>
@@ -160,7 +160,7 @@
 
 <body>
 
-<div class="version-tag">Metal v45</div>
+<div class="version-tag">Metal v45-FB</div>
 
 <img src="masthead.png" alt="Annomancer" style="max-width: 100%; width: 768px; height: auto; margin-bottom: 10px;">
 <p>A little science. A little magic. A roll of the dice. Boom. You've got annos.</p>
@@ -691,7 +691,9 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex){
   const BORDER=hexToRgbFloats(borderHex);
   const TEXT=hexToRgbFloats(textHex);
 
-  return matches.map(m=>{
+  console.log("[Annomancer-FB] generateAnnotBlocks called, matches="+matches.length+", comment length="+rawComment.length);
+
+  return matches.map((m,idx)=>{
     const x1=m.x, y1=m.yBottom, x2=m.x+m.w, y2=m.yTop;
     const p=m.pageNum-1;
 
@@ -713,63 +715,76 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex){
 
     if(!comment) return square;
 
-    /* === Dynamic text box sizing based on character count ===
-       Adobe FreeText annotations have ~4-5pt internal padding per side
-       on top of the Rect, so we need generous sizing to ensure text fits. */
-    const charCount=rawComment.length;
-    const CHAR_W=6.5;    /* conservative avg width per char at 10pt Arial */
+    /* === Dynamic text box sizing using canvas measurement ===
+       Use the existing canvas measurement system (setFont/measure)
+       to get accurate text width, then compute box dimensions.
+       Adobe FreeText has ~4-5pt internal padding, add generous buffer. */
     const LINE_H=16;     /* line height: 10pt font + leading */
-    const PAD_H=14;      /* horizontal padding each side (includes border + Adobe internal) */
-    const PAD_V=12;      /* vertical padding each side */
+    const PAD_H=16;      /* horizontal padding each side (border + Adobe internal) */
+    const PAD_V=14;      /* vertical padding each side */
+    const MAX_BOX_W=240; /* max text box width */
+    const MIN_BOX_W=60;  /* min text box width */
+    const MIN_BOX_H=38;  /* min text box height */
 
-    /* Count explicit line breaks in raw comment - each forces a new line */
-    const lineBreaks=(rawComment.match(/\n/g)||[]).length;
-
-    let boxW, estLines;
-    if(charCount<=20){
-      /* Short text: single line, width proportional to chars */
-      boxW=charCount*CHAR_W+PAD_H*2;
-      estLines=1;
-    } else if(charCount<=60){
-      /* Medium text */
-      boxW=150;
-      const cpl=Math.max(1,Math.floor((boxW-PAD_H*2)/CHAR_W));
-      estLines=Math.ceil(charCount/cpl);
-    } else if(charCount<=150){
-      /* Longer text */
-      boxW=190;
-      const cpl=Math.max(1,Math.floor((boxW-PAD_H*2)/CHAR_W));
-      estLines=Math.ceil(charCount/cpl);
-    } else {
-      /* Very long text */
-      boxW=230;
-      const cpl=Math.max(1,Math.floor((boxW-PAD_H*2)/CHAR_W));
-      estLines=Math.ceil(charCount/cpl);
+    /* Measure each explicit line to get accurate widths */
+    setFont(10,"Arial,sans-serif");
+    const textLines=rawComment.split('\n');
+    let maxLineW=0;
+    let totalTextW=0;
+    for(const line of textLines){
+      const w=measure(line);
+      totalTextW+=w;
+      if(w>maxLineW) maxLineW=w;
     }
 
-    /* Add lines for explicit line breaks + 1 safety buffer line */
-    estLines+=lineBreaks+1;
+    /* Scale canvas px → approximate PDF pt (10px ≈ 7.5pt, so adjust) */
+    maxLineW*=1.4;
+    totalTextW*=1.4;
 
-    let boxH=estLines*LINE_H+PAD_V*2;
+    let boxW, boxH;
 
-    /* Enforce minimum sizes */
-    boxW=Math.max(55,boxW);
-    boxH=Math.max(35,boxH);
+    if(maxLineW+PAD_H*2<=MAX_BOX_W && textLines.length<=3){
+      /* Short/medium text: width fits max, and few explicit lines */
+      boxW=Math.max(MIN_BOX_W, maxLineW+PAD_H*2);
+      boxH=textLines.length*LINE_H+PAD_V*2;
+    } else {
+      /* Longer text: pick a width and calculate wrapped line count */
+      boxW=Math.min(MAX_BOX_W, Math.max(MIN_BOX_W, maxLineW+PAD_H*2));
+      const innerW=boxW-PAD_H*2;
+
+      /* Count lines including word-wrapping */
+      let totalLines=0;
+      for(const line of textLines){
+        const lineW=measure(line)*1.4;
+        totalLines+=Math.max(1, Math.ceil(lineW/innerW));
+      }
+      boxH=totalLines*LINE_H+PAD_V*2;
+    }
+
+    /* Add 1 safety buffer line to height */
+    boxH+=LINE_H;
+
+    /* Enforce minimums */
+    boxW=Math.max(MIN_BOX_W, boxW);
+    boxH=Math.max(MIN_BOX_H, boxH);
 
     /* === Position: left half → text box to the LEFT, right half → to the RIGHT ===
        The horizontal center of the highlighted word determines which half it's on.
        Text boxes extend outward toward the nearest page margin. */
     const wordCenter=(x1+x2)/2;
-    const GAP=4;
+    const GAP=6;
     let l, r, t, b;
+    let side;
 
     if(wordCenter<PW/2){
       /* Left half of page: place text box to the LEFT of the square */
+      side="LEFT";
       r=x1-GAP;
       l=r-boxW;
       if(l<2){ l=2; }
     } else {
       /* Right half of page: place text box to the RIGHT of the square */
+      side="RIGHT";
       l=x2+GAP;
       r=l+boxW;
       if(r>PW-2){ r=PW-2; }
@@ -778,6 +793,8 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex){
     /* Vertically align top of text box with top of square */
     t=y2;
     b=t-boxH;
+
+    console.log("[Annomancer-FB] Match #"+idx+": word x=["+x1.toFixed(1)+","+x2.toFixed(1)+"] center="+wordCenter.toFixed(1)+" pageW="+PW+" → "+side+" | textBox=["+l.toFixed(1)+","+b.toFixed(1)+","+r.toFixed(1)+","+t.toFixed(1)+"] size="+boxW.toFixed(0)+"x"+boxH.toFixed(0));
 
     const freeText=
 `<<
