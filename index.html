@@ -5,7 +5,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<title>Annomancer - Metal v45-FB3</title>
+<title>Annomancer - Metal v46</title>
 
 <script src="pdf.js"></script>
 <script src="xlsx.full.min.js"></script>
@@ -163,7 +163,7 @@
 
 <body>
 
-<div class="version-tag">Metal v45-FB3</div>
+<div class="version-tag">Metal v46</div>
 
 <img src="masthead.png" alt="Annomancer" style="max-width: 100%; width: 768px; height: auto; margin-bottom: 10px;">
 <p>A little science. A little magic. A roll of the dice. Boom. You've got annos.</p>
@@ -190,6 +190,11 @@
 
   <label><b>Text Box Color:</b></label>
   <input type="color" id="textPicker" value="#FF0001">
+
+  <label style="display:flex; align-items:center; gap:6px; cursor:pointer; margin-top:4px;">
+    <input type="checkbox" id="prismaticCheck" style="margin:0; width:16px; height:16px;">
+    <b>Prismatic Color Coding</b>
+  </label>
 </div>
 
 <div style="position:relative; width:85%; margin:auto; margin-top:10px;">
@@ -723,21 +728,92 @@ function hexToRgbFloats(hex){
   return `${r} ${g} ${b}`;
 }
 
-function generateAnnotBlocks(matches, commentText, borderHex, textHex){
+/* Prismatic color palette: 20 distinct colors visible on white */
+const PRISMATIC_PALETTE=[
+  "#E6194B","#3CB44B","#4363D8","#F58231","#911EB4",
+  "#42D4F4","#F032E6","#469990","#9A6324","#800000",
+  "#000075","#808000","#2196F3","#FF5722","#009688",
+  "#795548","#607D8B","#8BC34A","#FF9800","#2F4F4F"
+];
+
+/* Resolve text box overlaps with previously placed boxes.
+   Shifts box downward (LEFT/RIGHT) or rightward (TOP/BOTTOM) until clear. */
+function resolveBoxOverlap(l,b,r,t,side,pageBoxes){
+  const GAP=6;
+  for(let iter=0;iter<30;iter++){
+    let shifted=false;
+    for(const box of pageBoxes){
+      if(l<box.r+GAP && r>box.l-GAP && b<box.t+GAP && t>box.b-GAP){
+        if(side==="LEFT"||side==="RIGHT"){
+          /* Shift down in PDF coords (decrease y) */
+          const delta=t-(box.b-GAP);
+          t-=delta; b-=delta;
+        } else {
+          /* Shift right */
+          const delta=(box.r+GAP)-l;
+          l+=delta; r+=delta;
+        }
+        shifted=true;
+        break;
+      }
+    }
+    if(!shifted) break;
+  }
+  return {l,b,r,t};
+}
+
+/* Create an FDF Line annotation between two points */
+function makeLineAnnot(lx1,ly1,lx2,ly2,page,colorFloats){
+  const mnX=Math.min(lx1,lx2), mxX=Math.max(lx1,lx2);
+  const mnY=Math.min(ly1,ly2), mxY=Math.max(ly1,ly2);
+  return `<<
+/Type /Annot
+/Subtype /Line
+/Rect [${mnX-1} ${mnY-1} ${mxX+1} ${mxY+1}]
+/L [${lx1} ${ly1} ${lx2} ${ly2}]
+/Page ${page}
+/C [${colorFloats}]
+/BS << /W 1 >>
+/T (AutoGen)
+/Contents ()
+>>`;
+}
+
+function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBoxes, prismaticMode, pageColorCounters){
+  placedBoxes=placedBoxes||{};
+  pageColorCounters=pageColorCounters||{};
   const rawComment=(commentText||"").trim();
   const comment=escComment(rawComment);
-  const BORDER=hexToRgbFloats(borderHex);
-  const TEXT=hexToRgbFloats(textHex);
+  const BORDER_DEF=hexToRgbFloats(borderHex);
+  const TEXT_DEF=hexToRgbFloats(textHex);
+  const TEXT_RED="1 0 0"; /* red for prismatic text */
 
-  console.log("[Annomancer-FB] generateAnnotBlocks called, matches="+matches.length+", comment length="+rawComment.length);
+  console.log("[Annomancer-FB] generateAnnotBlocks called, matches="+matches.length+", comment length="+rawComment.length+", prismatic="+!!prismaticMode);
 
   return matches.map((m,idx)=>{
     const x1=m.x, y1=m.yBottom, x2=m.x+m.w, y2=m.yTop;
     const p=m.pageNum-1;
+    const pageNum=m.pageNum;
 
     /* Use actual page dimensions from match data, fall back to US Letter */
     const PW=m.pageWidth||612;
     const PH=m.pageHeight||792;
+
+    /* === Prismatic color selection === */
+    let BORDER, TEXT_C, textHexForDS;
+    if(prismaticMode){
+      if(!pageColorCounters[pageNum]) pageColorCounters[pageNum]=0;
+      const ci=pageColorCounters[pageNum]%PRISMATIC_PALETTE.length;
+      pageColorCounters[pageNum]++;
+      const pHex=PRISMATIC_PALETTE[ci];
+      BORDER=hexToRgbFloats(pHex);
+      TEXT_C=TEXT_RED;
+      textHexForDS="#FF0000";
+    } else {
+      BORDER=BORDER_DEF;
+      TEXT_C=TEXT_DEF;
+      textHexForDS=textHex;
+    }
 
     let square=
 `<<
@@ -754,190 +830,110 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex){
 
     if(!comment) return square;
 
-    /* === Dynamic text box sizing using canvas measurement ===
-       Use the existing canvas measurement system (setFont/measure)
-       to get accurate text width, then compute box dimensions.
-       Adobe FreeText has ~4-5pt internal padding, add generous buffer. */
-    const LINE_H=16;     /* line height: 10pt font + leading */
-    const PAD_H=16;      /* horizontal padding each side (border + Adobe internal) */
-    const PAD_V=14;      /* vertical padding each side */
-    const MAX_BOX_W=240; /* max text box width */
-    const MIN_BOX_W=60;  /* min text box width */
-    const MIN_BOX_H=38;  /* min text box height */
+    /* === Dynamic text box sizing using canvas measurement === */
+    const LINE_H=16, PAD_H=16, PAD_V=14;
+    const MAX_BOX_W=240, MIN_BOX_W=60, MIN_BOX_H=38;
 
-    /* Measure each explicit line to get accurate widths */
     setFont(10,"Arial,sans-serif");
     const textLines=rawComment.split('\n');
-    let maxLineW=0;
-    let totalTextW=0;
+    let maxLineW=0, totalTextW=0;
     for(const line of textLines){
       const w=measure(line);
       totalTextW+=w;
       if(w>maxLineW) maxLineW=w;
     }
-
-    /* Scale canvas px → approximate PDF pt (10px ≈ 7.5pt, so adjust) */
-    maxLineW*=1.4;
-    totalTextW*=1.4;
+    maxLineW*=1.4; totalTextW*=1.4;
 
     let boxW, boxH;
-
     if(maxLineW+PAD_H*2<=MAX_BOX_W && textLines.length<=3){
-      /* Short/medium text: width fits max, and few explicit lines */
       boxW=Math.max(MIN_BOX_W, maxLineW+PAD_H*2);
       boxH=textLines.length*LINE_H+PAD_V*2;
     } else {
-      /* Longer text: pick a width and calculate wrapped line count */
       boxW=Math.min(MAX_BOX_W, Math.max(MIN_BOX_W, maxLineW+PAD_H*2));
       const innerW=boxW-PAD_H*2;
-
-      /* Count lines including word-wrapping */
       let totalLines=0;
       for(const line of textLines){
-        const lineW=measure(line)*1.4;
-        totalLines+=Math.max(1, Math.ceil(lineW/innerW));
+        totalLines+=Math.max(1, Math.ceil(measure(line)*1.4/innerW));
       }
       boxH=totalLines*LINE_H+PAD_V*2;
     }
-
-    /* Add 1 safety buffer line to height */
     boxH+=LINE_H;
-
-    /* Enforce minimums */
     boxW=Math.max(MIN_BOX_W, boxW);
     boxH=Math.max(MIN_BOX_H, boxH);
 
-    /* === Decide placement: top/bottom margin (vertical) or left/right margin (horizontal) ===
-       1. Check if word is near top/bottom of content area AND there's a usable margin there.
-       2. If so, place text box in the top or bottom margin with a vertical connecting line.
-       3. Otherwise, use the existing left/right margin with a horizontal connecting line.
-    */
-    const mL=m.marginLeft||36;           /* left edge of page text content */
-    const mR=m.marginRight||(PW-36);     /* right edge of page text content */
-    const cTop=m.contentTop||(PH-36);    /* top edge of page text content */
-    const cBot=m.contentBottom||36;      /* bottom edge of page text content */
+    /* === Decide placement direction === */
+    const mL=m.marginLeft||36;
+    const mR=m.marginRight||(PW-36);
+    const cTop=m.contentTop||(PH-36);
+    const cBot=m.contentBottom||36;
     const contentHeight=cTop-cBot;
     const wordCenter=(x1+x2)/2;
-    const wordMidY=(y1+y2)/2;
-    const MARGIN_GAP=4;
-    const MIN_VERT_MARGIN=50; /* minimum pts of top/bottom margin to use vertical placement */
+    const MARGIN_GAP=4, MIN_VERT_MARGIN=50;
 
-    /* Vertical margin sizes */
-    const topMarginSize=PH-cTop;         /* space above content */
-    const bottomMarginSize=cBot;          /* space below content */
-
-    /* Is word near the top or bottom of the content area? (within ~20% of content height) */
+    const topMarginSize=PH-cTop;
+    const bottomMarginSize=cBot;
     const nearTopThreshold=cTop-contentHeight*0.2;
     const nearBotThreshold=cBot+contentHeight*0.2;
     const wordNearTop=y2>nearTopThreshold && topMarginSize>=MIN_VERT_MARGIN;
     const wordNearBot=y1<nearBotThreshold && bottomMarginSize>=MIN_VERT_MARGIN;
 
     let l, r, t, b;
-    let side;        /* LEFT, RIGHT, TOP, BOTTOM */
-    let lineAnnot;   /* will hold the Line annotation string */
+    let side;
 
     if(wordNearTop){
-      /* === TOP margin placement === */
       side="TOP";
-      /* Horizontally align text box with the square */
       l=Math.max(2, x1);
       r=Math.min(PW-2, l+boxW);
-      /* Place text box above the content area */
       b=cTop+MARGIN_GAP;
       t=Math.min(PH-2, b+boxH);
-
-      /* Vertical line from text box bottom down to square top */
-      const lineX=wordCenter;
-      lineAnnot=
-`<<
-/Type /Annot
-/Subtype /Line
-/Rect [${lineX-2} ${y2} ${lineX+2} ${b}]
-/L [${lineX} ${b} ${lineX} ${y2}]
-/Page ${p}
-/C [${BORDER}]
-/BS << /W 1 >>
-/T (AutoGen)
-/Contents ()
->>`;
-
     } else if(wordNearBot){
-      /* === BOTTOM margin placement === */
       side="BOTTOM";
-      /* Horizontally align text box with the square */
       l=Math.max(2, x1);
       r=Math.min(PW-2, l+boxW);
-      /* Place text box below the content area */
       t=cBot-MARGIN_GAP;
       b=Math.max(2, t-boxH);
-
-      /* Vertical line from square bottom down to text box top */
-      const lineX=wordCenter;
-      lineAnnot=
-`<<
-/Type /Annot
-/Subtype /Line
-/Rect [${lineX-2} ${t} ${lineX+2} ${y1}]
-/L [${lineX} ${y1} ${lineX} ${t}]
-/Page ${p}
-/C [${BORDER}]
-/BS << /W 1 >>
-/T (AutoGen)
-/Contents ()
->>`;
-
     } else if(wordCenter<PW/2){
-      /* === LEFT margin placement (horizontal) === */
       side="LEFT";
       r=mL-MARGIN_GAP;
       l=Math.max(2, r-boxW);
       if(r-l<40){ r=mL+20; l=Math.max(2, r-boxW); }
-      t=y2;
-      b=t-boxH;
-
-      const lineY=(y1+y2)/2;
-      const lnMinX=Math.min(r,x1);
-      const lnMaxX=Math.max(r,x1);
-      lineAnnot=
-`<<
-/Type /Annot
-/Subtype /Line
-/Rect [${lnMinX} ${lineY-2} ${lnMaxX} ${lineY+2}]
-/L [${r} ${lineY} ${x1} ${lineY}]
-/Page ${p}
-/C [${BORDER}]
-/BS << /W 1 >>
-/T (AutoGen)
-/Contents ()
->>`;
-
+      t=y2; b=t-boxH;
     } else {
-      /* === RIGHT margin placement (horizontal) === */
       side="RIGHT";
       l=mR+MARGIN_GAP;
       r=Math.min(PW-2, l+boxW);
       if(r-l<40){ l=mR-20; r=Math.min(PW-2, l+boxW); }
-      t=y2;
-      b=t-boxH;
-
-      const lineY=(y1+y2)/2;
-      const lnMinX=Math.min(x2,l);
-      const lnMaxX=Math.max(x2,l);
-      lineAnnot=
-`<<
-/Type /Annot
-/Subtype /Line
-/Rect [${lnMinX} ${lineY-2} ${lnMaxX} ${lineY+2}]
-/L [${x2} ${lineY} ${l} ${lineY}]
-/Page ${p}
-/C [${BORDER}]
-/BS << /W 1 >>
-/T (AutoGen)
-/Contents ()
->>`;
+      t=y2; b=t-boxH;
     }
 
-    console.log("[Annomancer-FB] Match #"+idx+": word=["+x1.toFixed(1)+","+y1.toFixed(1)+","+x2.toFixed(1)+","+y2.toFixed(1)+"] margins L/R=["+mL.toFixed(1)+","+mR.toFixed(1)+"] T/B=["+cTop.toFixed(1)+","+cBot.toFixed(1)+"] pageW="+PW+" pageH="+PH+" → "+side+" | textBox=["+l.toFixed(1)+","+b.toFixed(1)+","+r.toFixed(1)+","+t.toFixed(1)+"]");
+    /* === Resolve overlaps with previously placed text boxes === */
+    if(!placedBoxes[pageNum]) placedBoxes[pageNum]=[];
+    const resolved=resolveBoxOverlap(l,b,r,t,side,placedBoxes[pageNum]);
+    l=resolved.l; b=resolved.b; r=resolved.r; t=resolved.t;
+
+    /* Clamp to page bounds */
+    if(b<2) { t+=(2-b); b=2; }
+    if(t>PH-2) { b-=(t-(PH-2)); t=PH-2; }
+    if(l<2) { r+=(2-l); l=2; }
+    if(r>PW-2) { l-=(r-(PW-2)); r=PW-2; }
+
+    /* Record this text box for future overlap checks */
+    placedBoxes[pageNum].push({l,b,r,t});
+
+    /* === Connecting line (may be diagonal after overlap shift) ===
+       Line goes from text box edge midpoint to square edge midpoint. */
+    let lineAnnot;
+    if(side==="TOP"){
+      lineAnnot=makeLineAnnot((l+r)/2, b, wordCenter, y2, p, BORDER);
+    } else if(side==="BOTTOM"){
+      lineAnnot=makeLineAnnot(wordCenter, y1, (l+r)/2, t, p, BORDER);
+    } else if(side==="LEFT"){
+      lineAnnot=makeLineAnnot(r, (b+t)/2, x1, (y1+y2)/2, p, BORDER);
+    } else {
+      lineAnnot=makeLineAnnot(x2, (y1+y2)/2, l, (b+t)/2, p, BORDER);
+    }
+
+    console.log("[Annomancer-FB] Match #"+idx+": → "+side+(prismaticMode?" [prismatic]":"")+" | textBox=["+l.toFixed(1)+","+b.toFixed(1)+","+r.toFixed(1)+","+t.toFixed(1)+"]");
 
     const freeText=
 `<<
@@ -948,8 +944,8 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex){
 /Rect [${l} ${b} ${r} ${t}]
 /Contents (${comment})
 /Page ${p}
-/DA (${TEXT} rg /Arial 10 Tf)
-/DS (font: Arial,sans-serif 10.0pt; text-align:left; color:${textHex})
+/DA (${TEXT_C} rg /Arial 10 Tf)
+/DS (font: Arial,sans-serif 10.0pt; text-align:left; color:${textHexForDS})
 /C [${SNEAKY_WHITE}]
 /BC [${BORDER}]
 /BS << /W 2 >>
@@ -1031,7 +1027,8 @@ document.getElementById("searchButton").onclick=async()=>{
 
     await render(data,matches,borderHex);
 
-    const annots=generateAnnotBlocks(matches,comment,borderHex,textHex);
+    const prismatic=document.getElementById("prismaticCheck").checked;
+    const annots=generateAnnotBlocks(matches,comment,borderHex,textHex,{},prismatic,{});
 
     const fdf=
 `%FDF-1.2
@@ -1097,6 +1094,10 @@ async function runAutomation(){
     out.textContent = "Abbreviation mode enabled...";
   }
 
+  const prismaticMode=document.getElementById("prismaticCheck").checked;
+  const placedBoxes={};          /* Track placed text boxes per page for overlap avoidance */
+  const pageColorCounters={};    /* Track prismatic color index per page */
+
   const pdfArray=await pdfFile.arrayBuffer();
 
   while(true){
@@ -1130,7 +1131,7 @@ async function runAutomation(){
         if (debugMode) {
           await render(new Uint8Array(pdfArray), matches, borderHex);
         }
-        const blocks=generateAnnotBlocks(matches, comment||"", borderHex, textHex);
+        const blocks=generateAnnotBlocks(matches, comment||"", borderHex, textHex, placedBoxes, prismaticMode, pageColorCounters);
         cumulativeAnnots.push(blocks);
         out.textContent=`Row ${rowNum} processed (Full claim found)...`;
         skipShortenedClaims = true; /* Skip subsequent shortened claims */
@@ -1156,7 +1157,7 @@ async function runAutomation(){
         if (debugMode) {
           await render(new Uint8Array(pdfArray), matches, borderHex);
         }
-        const blocks=generateAnnotBlocks(matches, comment||"", borderHex, textHex);
+        const blocks=generateAnnotBlocks(matches, comment||"", borderHex, textHex, placedBoxes, prismaticMode, pageColorCounters);
         cumulativeAnnots.push(blocks);
         out.textContent=`Row ${rowNum} processed (Shortened claim fallback)...`;
         skipShortenedClaims = true; /* Skip remaining shortened claims */
@@ -1173,7 +1174,7 @@ async function runAutomation(){
       await render(new Uint8Array(pdfArray), matches, borderHex);
     }
 
-    const blocks=generateAnnotBlocks(matches, comment||"", borderHex, textHex);
+    const blocks=generateAnnotBlocks(matches, comment||"", borderHex, textHex, placedBoxes, prismaticMode, pageColorCounters);
     cumulativeAnnots.push(blocks);
 
     out.textContent=`Row ${rowNum} processed...`;
