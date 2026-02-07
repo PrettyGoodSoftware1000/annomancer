@@ -5,7 +5,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<title>Annomancer - Metal v45-FB</title>
+<title>Annomancer - Metal v45-FB2</title>
 
 <script src="pdf.js"></script>
 <script src="xlsx.full.min.js"></script>
@@ -163,7 +163,7 @@
 
 <body>
 
-<div class="version-tag">Metal v45-FB</div>
+<div class="version-tag">Metal v45-FB2</div>
 
 <img src="masthead.png" alt="Annomancer" style="max-width: 100%; width: 768px; height: auto; margin-bottom: 10px;">
 <p>A little science. A little magic. A roll of the dice. Boom. You've got annos.</p>
@@ -356,6 +356,21 @@ async function extractMatches(pdfData, term, abbreviationMode = false){
     const text = await page.getTextContent();
     let chars = [];
 
+    /* Detect content boundaries (margins) on this page */
+    let contentLeft = Infinity, contentRight = -Infinity;
+    for (const item of text.items) {
+      if (!item.str || !item.str.trim()) continue;
+      const T = item.transform;
+      const iw = item.width || 0;
+      const left = T[4];
+      const right = T[4] + iw;
+      if (left < contentLeft) contentLeft = left;
+      if (right > contentRight) contentRight = right;
+    }
+    /* Fallback if no text found */
+    if (contentLeft === Infinity) contentLeft = 36;
+    if (contentRight === -Infinity) contentRight = pgW - 36;
+
     /* flatten char runs */
     for (const item of text.items) {
       const str = item.str || "";
@@ -429,6 +444,8 @@ async function extractMatches(pdfData, term, abbreviationMode = false){
           box: {
             pageNum,
             pageWidth: pgW,
+            marginLeft: contentLeft,
+            marginRight: contentRight,
             x: minLeft,
             yTop: maxTop,
             yBottom: minBot,
@@ -629,6 +646,8 @@ async function extractMatches(pdfData, term, abbreviationMode = false){
       out.push({
         pageNum,
         pageWidth: pgW,
+        marginLeft: contentLeft,
+        marginRight: contentRight,
         x: minLeft,
         yTop: maxTop,
         yBottom: minBot,
@@ -771,33 +790,56 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex){
     boxW=Math.max(MIN_BOX_W, boxW);
     boxH=Math.max(MIN_BOX_H, boxH);
 
-    /* === Position: left half → text box to the LEFT, right half → to the RIGHT ===
-       The horizontal center of the highlighted word determines which half it's on.
-       Text boxes extend outward toward the nearest page margin. */
+    /* === Position text box in nearest margin whitespace ===
+       Use detected content boundaries (marginLeft / marginRight) to find
+       the actual empty whitespace on each side of the page.
+       Left-half words → text box in left margin.
+       Right-half words → text box in right margin.
+       Then draw a horizontal line connecting the text box to the square. */
+    const mL=m.marginLeft||36;    /* left edge of page text content */
+    const mR=m.marginRight||(PW-36); /* right edge of page text content */
     const wordCenter=(x1+x2)/2;
-    const GAP=6;
+    const MARGIN_GAP=4; /* gap between text box and content edge */
     let l, r, t, b;
     let side;
 
     if(wordCenter<PW/2){
-      /* Left half of page: place text box to the LEFT of the square */
+      /* LEFT half: place text box in the left margin */
       side="LEFT";
-      r=x1-GAP;
-      l=r-boxW;
-      if(l<2){ l=2; }
+      r=mL-MARGIN_GAP;          /* text box right edge = just before content starts */
+      l=Math.max(2, r-boxW);    /* extend left toward page edge */
+      /* If margin is very narrow, let box overlap slightly into content */
+      if(r-l<40){ r=mL+20; l=Math.max(2, r-boxW); }
     } else {
-      /* Right half of page: place text box to the RIGHT of the square */
+      /* RIGHT half: place text box in the right margin */
       side="RIGHT";
-      l=x2+GAP;
-      r=l+boxW;
-      if(r>PW-2){ r=PW-2; }
+      l=mR+MARGIN_GAP;          /* text box left edge = just after content ends */
+      r=Math.min(PW-2, l+boxW); /* extend right toward page edge */
+      /* If margin is very narrow, let box overlap slightly into content */
+      if(r-l<40){ l=mR-20; r=Math.min(PW-2, l+boxW); }
     }
 
     /* Vertically align top of text box with top of square */
     t=y2;
     b=t-boxH;
 
-    console.log("[Annomancer-FB] Match #"+idx+": word x=["+x1.toFixed(1)+","+x2.toFixed(1)+"] center="+wordCenter.toFixed(1)+" pageW="+PW+" → "+side+" | textBox=["+l.toFixed(1)+","+b.toFixed(1)+","+r.toFixed(1)+","+t.toFixed(1)+"] size="+boxW.toFixed(0)+"x"+boxH.toFixed(0));
+    /* === Horizontal line connecting text box to square ===
+       Line runs at the vertical midpoint of the square, from the
+       text box edge to the square edge. */
+    const lineY=(y1+y2)/2;
+    let lineX1, lineX2;
+    if(side==="LEFT"){
+      lineX1=r;   /* right edge of text box */
+      lineX2=x1;  /* left edge of square */
+    } else {
+      lineX1=x2;  /* right edge of square */
+      lineX2=l;   /* left edge of text box */
+    }
+    /* Line bounding rect */
+    const lnMinX=Math.min(lineX1,lineX2);
+    const lnMaxX=Math.max(lineX1,lineX2);
+
+    console.log("[Annomancer-FB] Match #"+idx+": word x=["+x1.toFixed(1)+","+x2.toFixed(1)+"] center="+wordCenter.toFixed(1)+" margins=["+mL.toFixed(1)+","+mR.toFixed(1)+"] pageW="+PW+" → "+side+" | textBox=["+l.toFixed(1)+","+b.toFixed(1)+","+r.toFixed(1)+","+t.toFixed(1)+"] line=["+lineX1.toFixed(1)+","+lineX2.toFixed(1)+"]");
 
     const freeText=
 `<<
@@ -815,7 +857,20 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex){
 /BS << /W 2 >>
 >>`;
 
-    return square + "\n" + freeText;
+    const line=
+`<<
+/Type /Annot
+/Subtype /Line
+/Rect [${lnMinX} ${lineY-2} ${lnMaxX} ${lineY+2}]
+/L [${lineX1} ${lineY} ${lineX2} ${lineY}]
+/Page ${p}
+/C [${BORDER}]
+/BS << /W 1 >>
+/T (AutoGen)
+/Contents ()
+>>`;
+
+    return square + "\n" + freeText + "\n" + line;
 
   }).join("\n");
 }
