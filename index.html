@@ -5,7 +5,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
 <meta http-equiv="Pragma" content="no-cache" />
 <meta http-equiv="Expires" content="0" />
-<title>Annomancer - Metal v45-FB2</title>
+<title>Annomancer - Metal v45-FB3</title>
 
 <script src="pdf.js"></script>
 <script src="xlsx.full.min.js"></script>
@@ -163,7 +163,7 @@
 
 <body>
 
-<div class="version-tag">Metal v45-FB2</div>
+<div class="version-tag">Metal v45-FB3</div>
 
 <img src="masthead.png" alt="Annomancer" style="max-width: 100%; width: 768px; height: auto; margin-bottom: 10px;">
 <p>A little science. A little magic. A roll of the dice. Boom. You've got annos.</p>
@@ -356,20 +356,30 @@ async function extractMatches(pdfData, term, abbreviationMode = false){
     const text = await page.getTextContent();
     let chars = [];
 
+    const pgH = vp.height; /* actual page height in points */
+
     /* Detect content boundaries (margins) on this page */
     let contentLeft = Infinity, contentRight = -Infinity;
+    let contentTop = -Infinity, contentBottom = Infinity;
     for (const item of text.items) {
       if (!item.str || !item.str.trim()) continue;
       const T = item.transform;
       const iw = item.width || 0;
+      const h = Math.hypot(T[2], T[3]) || Math.abs(T[3]) || 10;
       const left = T[4];
       const right = T[4] + iw;
+      const yTop = T[5] + h;
+      const yBot = T[5] - h * 0.22;
       if (left < contentLeft) contentLeft = left;
       if (right > contentRight) contentRight = right;
+      if (yTop > contentTop) contentTop = yTop;
+      if (yBot < contentBottom) contentBottom = yBot;
     }
     /* Fallback if no text found */
     if (contentLeft === Infinity) contentLeft = 36;
     if (contentRight === -Infinity) contentRight = pgW - 36;
+    if (contentTop === -Infinity) contentTop = pgH - 36;
+    if (contentBottom === Infinity) contentBottom = 36;
 
     /* flatten char runs */
     for (const item of text.items) {
@@ -444,8 +454,11 @@ async function extractMatches(pdfData, term, abbreviationMode = false){
           box: {
             pageNum,
             pageWidth: pgW,
+            pageHeight: pgH,
             marginLeft: contentLeft,
             marginRight: contentRight,
+            contentTop: contentTop,
+            contentBottom: contentBottom,
             x: minLeft,
             yTop: maxTop,
             yBottom: minBot,
@@ -646,8 +659,11 @@ async function extractMatches(pdfData, term, abbreviationMode = false){
       out.push({
         pageNum,
         pageWidth: pgW,
+        pageHeight: pgH,
         marginLeft: contentLeft,
         marginRight: contentRight,
+        contentTop: contentTop,
+        contentBottom: contentBottom,
         x: minLeft,
         yTop: maxTop,
         yBottom: minBot,
@@ -719,8 +735,9 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex){
     const x1=m.x, y1=m.yBottom, x2=m.x+m.w, y2=m.yTop;
     const p=m.pageNum-1;
 
-    /* Use actual page width from match data, fall back to US Letter */
+    /* Use actual page dimensions from match data, fall back to US Letter */
     const PW=m.pageWidth||612;
+    const PH=m.pageHeight||792;
 
     let square=
 `<<
@@ -790,56 +807,137 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex){
     boxW=Math.max(MIN_BOX_W, boxW);
     boxH=Math.max(MIN_BOX_H, boxH);
 
-    /* === Position text box in nearest margin whitespace ===
-       Use detected content boundaries (marginLeft / marginRight) to find
-       the actual empty whitespace on each side of the page.
-       Left-half words → text box in left margin.
-       Right-half words → text box in right margin.
-       Then draw a horizontal line connecting the text box to the square. */
-    const mL=m.marginLeft||36;    /* left edge of page text content */
-    const mR=m.marginRight||(PW-36); /* right edge of page text content */
+    /* === Decide placement: top/bottom margin (vertical) or left/right margin (horizontal) ===
+       1. Check if word is near top/bottom of content area AND there's a usable margin there.
+       2. If so, place text box in the top or bottom margin with a vertical connecting line.
+       3. Otherwise, use the existing left/right margin with a horizontal connecting line.
+    */
+    const mL=m.marginLeft||36;           /* left edge of page text content */
+    const mR=m.marginRight||(PW-36);     /* right edge of page text content */
+    const cTop=m.contentTop||(PH-36);    /* top edge of page text content */
+    const cBot=m.contentBottom||36;      /* bottom edge of page text content */
+    const contentHeight=cTop-cBot;
     const wordCenter=(x1+x2)/2;
-    const MARGIN_GAP=4; /* gap between text box and content edge */
+    const wordMidY=(y1+y2)/2;
+    const MARGIN_GAP=4;
+    const MIN_VERT_MARGIN=50; /* minimum pts of top/bottom margin to use vertical placement */
+
+    /* Vertical margin sizes */
+    const topMarginSize=PH-cTop;         /* space above content */
+    const bottomMarginSize=cBot;          /* space below content */
+
+    /* Is word near the top or bottom of the content area? (within ~20% of content height) */
+    const nearTopThreshold=cTop-contentHeight*0.2;
+    const nearBotThreshold=cBot+contentHeight*0.2;
+    const wordNearTop=y2>nearTopThreshold && topMarginSize>=MIN_VERT_MARGIN;
+    const wordNearBot=y1<nearBotThreshold && bottomMarginSize>=MIN_VERT_MARGIN;
+
     let l, r, t, b;
-    let side;
+    let side;        /* LEFT, RIGHT, TOP, BOTTOM */
+    let lineAnnot;   /* will hold the Line annotation string */
 
-    if(wordCenter<PW/2){
-      /* LEFT half: place text box in the left margin */
+    if(wordNearTop){
+      /* === TOP margin placement === */
+      side="TOP";
+      /* Horizontally align text box with the square */
+      l=Math.max(2, x1);
+      r=Math.min(PW-2, l+boxW);
+      /* Place text box above the content area */
+      b=cTop+MARGIN_GAP;
+      t=Math.min(PH-2, b+boxH);
+
+      /* Vertical line from text box bottom down to square top */
+      const lineX=wordCenter;
+      lineAnnot=
+`<<
+/Type /Annot
+/Subtype /Line
+/Rect [${lineX-2} ${y2} ${lineX+2} ${b}]
+/L [${lineX} ${b} ${lineX} ${y2}]
+/Page ${p}
+/C [${BORDER}]
+/BS << /W 1 >>
+/T (AutoGen)
+/Contents ()
+>>`;
+
+    } else if(wordNearBot){
+      /* === BOTTOM margin placement === */
+      side="BOTTOM";
+      /* Horizontally align text box with the square */
+      l=Math.max(2, x1);
+      r=Math.min(PW-2, l+boxW);
+      /* Place text box below the content area */
+      t=cBot-MARGIN_GAP;
+      b=Math.max(2, t-boxH);
+
+      /* Vertical line from square bottom down to text box top */
+      const lineX=wordCenter;
+      lineAnnot=
+`<<
+/Type /Annot
+/Subtype /Line
+/Rect [${lineX-2} ${t} ${lineX+2} ${y1}]
+/L [${lineX} ${y1} ${lineX} ${t}]
+/Page ${p}
+/C [${BORDER}]
+/BS << /W 1 >>
+/T (AutoGen)
+/Contents ()
+>>`;
+
+    } else if(wordCenter<PW/2){
+      /* === LEFT margin placement (horizontal) === */
       side="LEFT";
-      r=mL-MARGIN_GAP;          /* text box right edge = just before content starts */
-      l=Math.max(2, r-boxW);    /* extend left toward page edge */
-      /* If margin is very narrow, let box overlap slightly into content */
+      r=mL-MARGIN_GAP;
+      l=Math.max(2, r-boxW);
       if(r-l<40){ r=mL+20; l=Math.max(2, r-boxW); }
+      t=y2;
+      b=t-boxH;
+
+      const lineY=(y1+y2)/2;
+      const lnMinX=Math.min(r,x1);
+      const lnMaxX=Math.max(r,x1);
+      lineAnnot=
+`<<
+/Type /Annot
+/Subtype /Line
+/Rect [${lnMinX} ${lineY-2} ${lnMaxX} ${lineY+2}]
+/L [${r} ${lineY} ${x1} ${lineY}]
+/Page ${p}
+/C [${BORDER}]
+/BS << /W 1 >>
+/T (AutoGen)
+/Contents ()
+>>`;
+
     } else {
-      /* RIGHT half: place text box in the right margin */
+      /* === RIGHT margin placement (horizontal) === */
       side="RIGHT";
-      l=mR+MARGIN_GAP;          /* text box left edge = just after content ends */
-      r=Math.min(PW-2, l+boxW); /* extend right toward page edge */
-      /* If margin is very narrow, let box overlap slightly into content */
+      l=mR+MARGIN_GAP;
+      r=Math.min(PW-2, l+boxW);
       if(r-l<40){ l=mR-20; r=Math.min(PW-2, l+boxW); }
+      t=y2;
+      b=t-boxH;
+
+      const lineY=(y1+y2)/2;
+      const lnMinX=Math.min(x2,l);
+      const lnMaxX=Math.max(x2,l);
+      lineAnnot=
+`<<
+/Type /Annot
+/Subtype /Line
+/Rect [${lnMinX} ${lineY-2} ${lnMaxX} ${lineY+2}]
+/L [${x2} ${lineY} ${l} ${lineY}]
+/Page ${p}
+/C [${BORDER}]
+/BS << /W 1 >>
+/T (AutoGen)
+/Contents ()
+>>`;
     }
 
-    /* Vertically align top of text box with top of square */
-    t=y2;
-    b=t-boxH;
-
-    /* === Horizontal line connecting text box to square ===
-       Line runs at the vertical midpoint of the square, from the
-       text box edge to the square edge. */
-    const lineY=(y1+y2)/2;
-    let lineX1, lineX2;
-    if(side==="LEFT"){
-      lineX1=r;   /* right edge of text box */
-      lineX2=x1;  /* left edge of square */
-    } else {
-      lineX1=x2;  /* right edge of square */
-      lineX2=l;   /* left edge of text box */
-    }
-    /* Line bounding rect */
-    const lnMinX=Math.min(lineX1,lineX2);
-    const lnMaxX=Math.max(lineX1,lineX2);
-
-    console.log("[Annomancer-FB] Match #"+idx+": word x=["+x1.toFixed(1)+","+x2.toFixed(1)+"] center="+wordCenter.toFixed(1)+" margins=["+mL.toFixed(1)+","+mR.toFixed(1)+"] pageW="+PW+" → "+side+" | textBox=["+l.toFixed(1)+","+b.toFixed(1)+","+r.toFixed(1)+","+t.toFixed(1)+"] line=["+lineX1.toFixed(1)+","+lineX2.toFixed(1)+"]");
+    console.log("[Annomancer-FB] Match #"+idx+": word=["+x1.toFixed(1)+","+y1.toFixed(1)+","+x2.toFixed(1)+","+y2.toFixed(1)+"] margins L/R=["+mL.toFixed(1)+","+mR.toFixed(1)+"] T/B=["+cTop.toFixed(1)+","+cBot.toFixed(1)+"] pageW="+PW+" pageH="+PH+" → "+side+" | textBox=["+l.toFixed(1)+","+b.toFixed(1)+","+r.toFixed(1)+","+t.toFixed(1)+"]");
 
     const freeText=
 `<<
@@ -857,20 +955,7 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex){
 /BS << /W 2 >>
 >>`;
 
-    const line=
-`<<
-/Type /Annot
-/Subtype /Line
-/Rect [${lnMinX} ${lineY-2} ${lnMaxX} ${lineY+2}]
-/L [${lineX1} ${lineY} ${lineX2} ${lineY}]
-/Page ${p}
-/C [${BORDER}]
-/BS << /W 1 >>
-/T (AutoGen)
-/Contents ()
->>`;
-
-    return square + "\n" + freeText + "\n" + line;
+    return square + "\n" + freeText + "\n" + lineAnnot;
 
   }).join("\n");
 }
