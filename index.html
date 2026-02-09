@@ -163,7 +163,7 @@
 
 <body>
 
-<div class="version-tag">Metal v47</div>
+<div class="version-tag">Metal v46</div>
 
 <img src="masthead.png" alt="Annomancer" style="max-width: 100%; width: 768px; height: auto; margin-bottom: 10px;">
 <p>A little science. A little magic. A roll of the dice. Boom. You've got annos.</p>
@@ -321,7 +321,7 @@ function setFont(px,fam){ mctx.font=px+"px "+(fam||"sans-serif"); }
 function measure(t){ return mctx.measureText(t).width||0; }
 
 /* ================================================
-   METAL v47 - GREEDY SEQUENTIAL SEARCH ENGINE
+   METAL v45 - GREEDY SEQUENTIAL SEARCH ENGINE
    Supports up to 600 words with up to 12 line breaks
    Position-aware: segments must be sequential in PDF
    Strict proximity: max 4x line height gap, max 25 lines total
@@ -335,8 +335,6 @@ function measure(t){ return mctx.measureText(t).width||0; }
      - Empty → process normally, reset skip state
    Abbreviation mode: If A1="Abbreviation", require word boundaries
    Cloud: Projects loaded from SheetsDropdown.txt
-   v47: Improved line routing (H/V preferred, corner margin
-         preference, crossing avoidance), prismatic text color fix
    ================================================ */
 async function extractMatches(pdfData, term, abbreviationMode = false){
   const pdf = await pdfjsLib.getDocument({data: pdfData}).promise;
@@ -489,57 +487,44 @@ async function extractMatches(pdfData, term, abbreviationMode = false){
       }
       const avgHeight = totalHeight / boxes.length;
       
-      /* STRICT LIMITS:
-         - Vertical gap: max 4x line height (allows ~3 blank lines between segments)
-         - Horizontal: boxes must overlap horizontally OR be within reasonable reading flow
-         - Total height: merged box can't be more than 25x average line height (~12 real line breaks)
-      */
       const maxVerticalGap = avgHeight * 4;
       const maxTotalHeight = avgHeight * 25;
       
       /* Sort boxes by vertical position (top to bottom in PDF coords) */
       const sorted = [...boxes].sort((a, b) => b.yTop - a.yTop);
       
-      /* Check total vertical span */
       const topMost = sorted[0].yTop;
       const bottomMost = sorted[sorted.length - 1].yBottom;
       const totalSpan = topMost - bottomMost;
       
       if (totalSpan > maxTotalHeight) {
-        return false; /* Merged box would be way too tall */
+        return false;
       }
       
-      /* Check gap between each consecutive pair */
       for (let i = 0; i < sorted.length - 1; i++) {
         const upper = sorted[i];
         const lower = sorted[i + 1];
         
-        /* Vertical gap check */
         const vGap = upper.yBottom - lower.yTop;
         if (vGap > maxVerticalGap) {
-          return false; /* Too much vertical space between segments */
+          return false;
         }
         
-        /* Horizontal overlap/proximity check for multi-column detection */
-        /* Boxes should either overlap horizontally or be close enough for text flow */
         const upperLeft = upper.x;
         const upperRight = upper.x + upper.w;
         const lowerLeft = lower.x;
         const lowerRight = lower.x + lower.w;
         
-        /* Check if boxes overlap horizontally */
         const horizOverlap = !(upperRight < lowerLeft || lowerRight < upperLeft);
         
-        /* If no horizontal overlap, check if they're reasonably close */
         if (!horizOverlap) {
           const horizGap = Math.min(
             Math.abs(upperRight - lowerLeft),
             Math.abs(lowerRight - upperLeft)
           );
-          /* Allow horizontal gap up to ~half a page width (for text wrap) */
-          const pageWidth = 612; /* Standard letter width in points */
+          const pageWidth = 612;
           if (horizGap > pageWidth * 0.6) {
-            return false; /* Boxes are in different columns or areas */
+            return false;
           }
         }
       }
@@ -553,57 +538,47 @@ async function extractMatches(pdfData, term, abbreviationMode = false){
       return /^\s*$/.test(between);
     }
 
-    /* Greedy sequential: find longest match from current position, then continue */
-    /* Returns { segments: [...boxes], endPos: number, firstMatchPos: number } or { firstMatchPos: number } if partial match, or null if no match at all */
     function findGreedySegments(searchText, startFrom = 0) {
       const segments = [];
       const words = searchText.split(/\s+/);
       let wordIndex = 0;
-      let searchPos = startFrom; /* Position in merged PDF text - ensures sequential matches */
-      let lastEndPos = startFrom; /* Track where last segment ended */
-      let firstMatchPos = -1; /* Track where first segment started */
+      let searchPos = startFrom;
+      let lastEndPos = startFrom;
+      let firstMatchPos = -1;
 
       while (wordIndex < words.length && segments.length < MAX_SEGMENTS) {
         let found = false;
 
-        /* Try from all remaining words down to single word */
         for (let endIdx = words.length; endIdx > wordIndex; endIdx--) {
           const candidate = words.slice(wordIndex, endIdx).join(" ");
           const result = findLiteralBox(candidate, searchPos);
 
           if (result) {
-            /* CRITICAL: Check that there's no extra text between segments */
-            /* Text between lastEndPos and result.startPos should be whitespace only */
             if (segments.length > 0 && !isOnlyWhitespace(lastEndPos, result.startPos)) {
-              /* There's extra text between segments - try a smaller match */
               continue;
             }
 
-            /* Track where first match started */
             if (firstMatchPos === -1) {
               firstMatchPos = result.startPos;
             }
 
             segments.push(result.box);
-            lastEndPos = result.endPos; /* Track where this segment ended */
-            searchPos = result.endPos; /* Next search starts after this match */
-            wordIndex = endIdx; /* Move past matched words */
+            lastEndPos = result.endPos;
+            searchPos = result.endPos;
+            wordIndex = endIdx;
             found = true;
             break;
           }
         }
 
-        /* If even a single word isn't found at this position, fail */
         if (!found) {
-          /* Return where we started so caller can try from next position */
           if (firstMatchPos !== -1) {
             return { segments: null, firstMatchPos };
           }
-          return null; /* No match found at all from this position */
+          return null;
         }
       }
 
-      /* Only return segments if ALL words were matched */
       if (wordIndex < words.length) {
         return { segments: null, firstMatchPos };
       }
@@ -624,20 +599,15 @@ async function extractMatches(pdfData, term, abbreviationMode = false){
       literalSearchPos = literalResult.endPos;
     }
     
-    /* If we found literal matches, move to next page */
     if (foundLiteral) continue;
 
-    /* No literal matches - try to find ALL greedy sequential matches on this page */
     let greedySearchPos = 0;
     
     while (true) {
       const greedyResult = findGreedySegments(search, greedySearchPos);
       
-      /* No match found at all from this position */
       if (!greedyResult) break;
       
-      /* Partial match - first word found but couldn't complete */
-      /* Try again from after the first match position */
       if (!greedyResult.segments) {
         greedySearchPos = greedyResult.firstMatchPos + 1;
         continue;
@@ -645,14 +615,11 @@ async function extractMatches(pdfData, term, abbreviationMode = false){
       
       const segments = greedyResult.segments;
       
-      /* Proximity check: reject if boxes are too far apart */
       if (!boxesAreProximate(segments)) {
-        /* Skip this match but keep searching after it */
         greedySearchPos = greedyResult.endPos;
         continue;
       }
 
-      /* Merge all segment boxes into one */
       let minLeft = Infinity, maxRight = -Infinity;
       let minBot = Infinity, maxTop = -Infinity;
 
@@ -678,7 +645,6 @@ async function extractMatches(pdfData, term, abbreviationMode = false){
         h: maxTop - minBot
       });
       
-      /* Continue searching after this match */
       greedySearchPos = greedyResult.endPos;
     }
   }
@@ -686,38 +652,34 @@ async function extractMatches(pdfData, term, abbreviationMode = false){
   return out;
 }
 
-/* everything below this point stays exactly the same */
-
 function esc(s){ 
   return s
     .replace(/\\/g,"\\\\")
     .replace(/\(/g,"\\(")
     .replace(/\)/g,"\\)")
-    .replace(/[\r\n]+/g," ")      // Replace line breaks with space
-    .replace(/[""]/g,'"')          // Smart quotes → straight quotes
-    .replace(/['']/g,"'")          // Smart apostrophes → straight
-    .replace(/[—–]/g,"-")          // Em/en dash → hyphen
-    .replace(/…/g,"...")           // Ellipsis → three dots
-    .replace(/[^\x00-\x7F]/g,"");  // Remove any remaining non-ASCII
+    .replace(/[\r\n]+/g," ")
+    .replace(/["\u201C\u201D]/g,'"')
+    .replace(/['\u2018\u2019]/g,"'")
+    .replace(/[\u2014\u2013]/g,"-")
+    .replace(/\u2026/g,"...")
+    .replace(/[^\x00-\x7F]/g,"");
 }
 
-/* Escape for comments - preserves line breaks for FDF */
 function escComment(s){ 
   return s
     .replace(/\\/g,"\\\\")
     .replace(/\(/g,"\\(")
     .replace(/\)/g,"\\)")
-    .replace(/\r\n/g,"\\r")        // Windows line breaks → FDF line break
-    .replace(/\n/g,"\\r")          // Unix line breaks → FDF line break
-    .replace(/\r/g,"\\r")          // Mac line breaks → FDF line break
-    .replace(/[""]/g,'"')          // Smart quotes → straight quotes
-    .replace(/['']/g,"'")          // Smart apostrophes → straight
-    .replace(/[—–]/g,"-")          // Em/en dash → hyphen
-    .replace(/…/g,"...")           // Ellipsis → three dots
-    .replace(/[^\x00-\x7F]/g,"");  // Remove any remaining non-ASCII
+    .replace(/\r\n/g,"\\r")
+    .replace(/\n/g,"\\r")
+    .replace(/\r/g,"\\r")
+    .replace(/["\u201C\u201D]/g,'"')
+    .replace(/['\u2018\u2019]/g,"'")
+    .replace(/[\u2014\u2013]/g,"-")
+    .replace(/\u2026/g,"...")
+    .replace(/[^\x00-\x7F]/g,"");
 }
 
-/* Strip line breaks from search terms */
 function stripLineBreaks(s){
   return s.replace(/[\r\n]+/g," ").replace(/\s+/g," ").trim();
 }
@@ -738,8 +700,6 @@ const PRISMATIC_PALETTE=[
   "#795548","#607D8B","#8BC34A","#FF9800","#2F4F4F"
 ];
 
-/* Resolve text box overlaps with previously placed boxes.
-   Shifts box downward (LEFT/RIGHT) or rightward (TOP/BOTTOM) until clear. */
 function resolveBoxOverlap(l,b,r,t,side,pageBoxes){
   const GAP=6;
   for(let iter=0;iter<30;iter++){
@@ -747,11 +707,9 @@ function resolveBoxOverlap(l,b,r,t,side,pageBoxes){
     for(const box of pageBoxes){
       if(l<box.r+GAP && r>box.l-GAP && b<box.t+GAP && t>box.b-GAP){
         if(side==="LEFT"||side==="RIGHT"){
-          /* Shift down in PDF coords (decrease y) */
           const delta=t-(box.b-GAP);
           t-=delta; b-=delta;
         } else {
-          /* Shift right */
           const delta=(box.r+GAP)-l;
           l+=delta; r+=delta;
         }
@@ -764,7 +722,6 @@ function resolveBoxOverlap(l,b,r,t,side,pageBoxes){
   return {l,b,r,t};
 }
 
-/* Create an FDF Line annotation between two points */
 function makeLineAnnot(lx1,ly1,lx2,ly2,page,colorFloats){
   const mnX=Math.min(lx1,lx2), mxX=Math.max(lx1,lx2);
   const mnY=Math.min(ly1,ly2), mxY=Math.max(ly1,ly2);
@@ -781,107 +738,6 @@ function makeLineAnnot(lx1,ly1,lx2,ly2,page,colorFloats){
 >>`;
 }
 
-/* === v47: Create a routed line using H/V segments with an optional single bend ===
-   Produces 1 line (straight H or V) or 2 lines (L-shaped bend) or 1 diagonal as fallback.
-   Returns an array of line annotation strings. */
-function makeRoutedLine(fromX, fromY, toX, toY, page, colorFloats, placedLines) {
-  const lines = [];
-  
-  /* If already horizontal or vertical, just draw it */
-  const dx = Math.abs(fromX - toX);
-  const dy = Math.abs(fromY - toY);
-  
-  if (dx < 2) {
-    /* Nearly vertical */
-    lines.push(makeLineAnnot(fromX, fromY, fromX, toY, page, colorFloats));
-    if (placedLines) placedLines.push({x1:fromX,y1:fromY,x2:fromX,y2:toY});
-    return lines;
-  }
-  if (dy < 2) {
-    /* Nearly horizontal */
-    lines.push(makeLineAnnot(fromX, fromY, toX, fromY, page, colorFloats));
-    if (placedLines) placedLines.push({x1:fromX,y1:fromY,x2:toX,y2:fromY});
-    return lines;
-  }
-  
-  /* Need an L-shaped bend. Two options:
-     Option A: horizontal first, then vertical (bend at toX, fromY)
-     Option B: vertical first, then horizontal (bend at fromX, toY) */
-  
-  const bendA = { x: toX, y: fromY }; /* H then V */
-  const bendB = { x: fromX, y: toY }; /* V then H */
-  
-  /* Score each option by counting crossings with existing lines */
-  function countCrossings(segments) {
-    if (!placedLines || placedLines.length === 0) return 0;
-    let crossings = 0;
-    for (const seg of segments) {
-      for (const existing of placedLines) {
-        if (segmentsIntersect(seg.x1,seg.y1,seg.x2,seg.y2, existing.x1,existing.y1,existing.x2,existing.y2)) {
-          crossings++;
-        }
-      }
-    }
-    return crossings;
-  }
-  
-  const segsA = [
-    {x1:fromX, y1:fromY, x2:bendA.x, y2:bendA.y},
-    {x1:bendA.x, y1:bendA.y, x2:toX, y2:toY}
-  ];
-  const segsB = [
-    {x1:fromX, y1:fromY, x2:bendB.x, y2:bendB.y},
-    {x1:bendB.x, y1:bendB.y, x2:toX, y2:toY}
-  ];
-  
-  const crossA = countCrossings(segsA);
-  const crossB = countCrossings(segsB);
-  
-  let chosen;
-  if (crossA < crossB) {
-    chosen = segsA;
-  } else if (crossB < crossA) {
-    chosen = segsB;
-  } else {
-    /* Tie-break: prefer the option where the longer segment is H or V
-       in the dominant direction (usually H first for side placements,
-       V first for top/bottom) */
-    chosen = dx > dy ? segsA : segsB;
-  }
-  
-  for (const seg of chosen) {
-    lines.push(makeLineAnnot(seg.x1, seg.y1, seg.x2, seg.y2, page, colorFloats));
-    if (placedLines) placedLines.push(seg);
-  }
-  
-  return lines;
-}
-
-/* Segment intersection test (for crossing detection) */
-function segmentsIntersect(ax1,ay1,ax2,ay2, bx1,by1,bx2,by2) {
-  /* Skip if segments share an endpoint (connected, not crossing) */
-  const EPS = 0.5;
-  if ((Math.abs(ax1-bx1)<EPS && Math.abs(ay1-by1)<EPS) ||
-      (Math.abs(ax1-bx2)<EPS && Math.abs(ay1-by2)<EPS) ||
-      (Math.abs(ax2-bx1)<EPS && Math.abs(ay2-by1)<EPS) ||
-      (Math.abs(ax2-bx2)<EPS && Math.abs(ay2-by2)<EPS)) {
-    return false;
-  }
-  
-  function cross(ox,oy, ax,ay, bx,by) {
-    return (ax-ox)*(by-oy) - (ay-oy)*(bx-ox);
-  }
-  const d1 = cross(bx1,by1,bx2,by2,ax1,ay1);
-  const d2 = cross(bx1,by1,bx2,by2,ax2,ay2);
-  const d3 = cross(ax1,ay1,ax2,ay2,bx1,by1);
-  const d4 = cross(ax1,ay1,ax2,ay2,bx2,by2);
-  
-  if (((d1>0&&d2<0)||(d1<0&&d2>0)) && ((d3>0&&d4<0)||(d3<0&&d4>0))) {
-    return true;
-  }
-  return false;
-}
-
 function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBoxes, prismaticMode, pageColorCounters){
   placedBoxes=placedBoxes||{};
   pageColorCounters=pageColorCounters||{};
@@ -890,9 +746,6 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBox
   const BORDER_DEF=hexToRgbFloats(borderHex);
   const TEXT_DEF=hexToRgbFloats(textHex);
 
-  /* Track placed lines per page for crossing avoidance */
-  const placedLines = {};
-
   console.log("[Annomancer-FB] generateAnnotBlocks called, matches="+matches.length+", comment length="+rawComment.length+", prismatic="+!!prismaticMode);
 
   return matches.map((m,idx)=>{
@@ -900,14 +753,10 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBox
     const p=m.pageNum-1;
     const pageNum=m.pageNum;
 
-    /* Use actual page dimensions from match data, fall back to US Letter */
     const PW=m.pageWidth||612;
     const PH=m.pageHeight||792;
 
     /* === Prismatic color selection === */
-    /* FIX v47: In prismatic mode, text color inside the FreeText box now uses
-       the prismatic border color (matching the square annotation), NOT always red.
-       Previously TEXT_C was hardcoded to "1 0 0" (red) for all prismatic text boxes. */
     let BORDER, TEXT_C, textHexForDS;
     if(prismaticMode){
       if(!pageColorCounters[pageNum]) pageColorCounters[pageNum]=0;
@@ -915,8 +764,11 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBox
       pageColorCounters[pageNum]++;
       const pHex=PRISMATIC_PALETTE[ci];
       BORDER=hexToRgbFloats(pHex);
-      TEXT_C=BORDER;          /* v47 FIX: text matches border color */
-      textHexForDS=pHex;      /* v47 FIX: DS hex matches border color */
+      /* FIX: FreeText border (/BC) uses BORDER (prismatic color).
+         Text color inside also uses prismatic color so the whole
+         text box visually matches its Square + Line annotations. */
+      TEXT_C=BORDER;
+      textHexForDS=pHex;
     } else {
       BORDER=BORDER_DEF;
       TEXT_C=TEXT_DEF;
@@ -938,7 +790,6 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBox
 
     if(!comment) return square;
 
-    /* === Dynamic text box sizing using canvas measurement === */
     const LINE_H=16, PAD_H=16, PAD_V=14;
     const MAX_BOX_W=240, MIN_BOX_W=60, MIN_BOX_H=38;
 
@@ -969,50 +820,25 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBox
     boxW=Math.max(MIN_BOX_W, boxW);
     boxH=Math.max(MIN_BOX_H, boxH);
 
-    /* === Decide placement direction === */
     const mL=m.marginLeft||36;
     const mR=m.marginRight||(PW-36);
     const cTop=m.contentTop||(PH-36);
     const cBot=m.contentBottom||36;
     const contentHeight=cTop-cBot;
-    const wordCenterX=(x1+x2)/2;
-    const wordCenterY=(y1+y2)/2;
+    const wordCenter=(x1+x2)/2;
     const MARGIN_GAP=4, MIN_VERT_MARGIN=50;
 
     const topMarginSize=PH-cTop;
     const bottomMarginSize=cBot;
-    const leftMarginSize=mL;
-    const rightMarginSize=PW-mR;
     const nearTopThreshold=cTop-contentHeight*0.2;
     const nearBotThreshold=cBot+contentHeight*0.2;
     const wordNearTop=y2>nearTopThreshold && topMarginSize>=MIN_VERT_MARGIN;
     const wordNearBot=y1<nearBotThreshold && bottomMarginSize>=MIN_VERT_MARGIN;
 
-    /* v47: Corner detection - if word is near both top/bottom AND a side,
-       prefer side margins over top/bottom for cleaner H/V lines */
-    const nearLeftEdge = wordCenterX < mL + (mR - mL) * 0.3;
-    const nearRightEdge = wordCenterX > mR - (mR - mL) * 0.3;
-    const inCorner = (wordNearTop || wordNearBot) && (nearLeftEdge || nearRightEdge);
-
     let l, r, t, b;
     let side;
 
-    if (inCorner) {
-      /* Corner content: prefer side margins over top/bottom */
-      if (wordCenterX < PW / 2) {
-        side = "LEFT";
-        r = mL - MARGIN_GAP;
-        l = Math.max(2, r - boxW);
-        if (r - l < 40) { r = mL + 20; l = Math.max(2, r - boxW); }
-        t = y2; b = t - boxH;
-      } else {
-        side = "RIGHT";
-        l = mR + MARGIN_GAP;
-        r = Math.min(PW - 2, l + boxW);
-        if (r - l < 40) { l = mR - 20; r = Math.min(PW - 2, l + boxW); }
-        t = y2; b = t - boxH;
-      }
-    } else if(wordNearTop){
+    if(wordNearTop){
       side="TOP";
       l=Math.max(2, x1);
       r=Math.min(PW-2, l+boxW);
@@ -1024,7 +850,7 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBox
       r=Math.min(PW-2, l+boxW);
       t=cBot-MARGIN_GAP;
       b=Math.max(2, t-boxH);
-    } else if(wordCenterX<PW/2){
+    } else if(wordCenter<PW/2){
       side="LEFT";
       r=mL-MARGIN_GAP;
       l=Math.max(2, r-boxW);
@@ -1038,41 +864,27 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBox
       t=y2; b=t-boxH;
     }
 
-    /* === Resolve overlaps with previously placed text boxes === */
     if(!placedBoxes[pageNum]) placedBoxes[pageNum]=[];
     const resolved=resolveBoxOverlap(l,b,r,t,side,placedBoxes[pageNum]);
     l=resolved.l; b=resolved.b; r=resolved.r; t=resolved.t;
 
-    /* Clamp to page bounds */
     if(b<2) { t+=(2-b); b=2; }
     if(t>PH-2) { b-=(t-(PH-2)); t=PH-2; }
     if(l<2) { r+=(2-l); l=2; }
     if(r>PW-2) { l-=(r-(PW-2)); r=PW-2; }
 
-    /* Record this text box for future overlap checks */
     placedBoxes[pageNum].push({l,b,r,t});
 
-    /* === v47: Routed connecting line (H/V preferred, crossing avoidance) ===
-       Line goes from text box edge midpoint to square edge midpoint.
-       Uses L-shaped routing instead of diagonal when possible. */
-    if (!placedLines[pageNum]) placedLines[pageNum] = [];
-    
-    let fromX, fromY, toX, toY;
+    let lineAnnot;
     if(side==="TOP"){
-      fromX = (l+r)/2; fromY = b;
-      toX = wordCenterX; toY = y2;
+      lineAnnot=makeLineAnnot((l+r)/2, b, wordCenter, y2, p, BORDER);
     } else if(side==="BOTTOM"){
-      fromX = (l+r)/2; fromY = t;
-      toX = wordCenterX; toY = y1;
+      lineAnnot=makeLineAnnot(wordCenter, y1, (l+r)/2, t, p, BORDER);
     } else if(side==="LEFT"){
-      fromX = r; fromY = (b+t)/2;
-      toX = x1; toY = (y1+y2)/2;
+      lineAnnot=makeLineAnnot(r, (b+t)/2, x1, (y1+y2)/2, p, BORDER);
     } else {
-      fromX = l; fromY = (b+t)/2;
-      toX = x2; toY = (y1+y2)/2;
+      lineAnnot=makeLineAnnot(x2, (y1+y2)/2, l, (b+t)/2, p, BORDER);
     }
-    
-    const lineAnnots = makeRoutedLine(fromX, fromY, toX, toY, p, BORDER, placedLines[pageNum]);
 
     console.log("[Annomancer-FB] Match #"+idx+": → "+side+(prismaticMode?" [prismatic]":"")+" | textBox=["+l.toFixed(1)+","+b.toFixed(1)+","+r.toFixed(1)+","+t.toFixed(1)+"]");
 
@@ -1092,7 +904,7 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBox
 /BS << /W 2 >>
 >>`;
 
-    return square + "\n" + freeText + "\n" + lineAnnots.join("\n");
+    return square + "\n" + freeText + "\n" + lineAnnot;
 
   }).join("\n");
 }
@@ -1138,7 +950,6 @@ async function render(pdfData,matches,borderHex){
   }
 }
 
-/* Debug mode */
 let debugMode = false;
 
 document.getElementById("debugButton").onclick=()=>{
@@ -1149,7 +960,6 @@ document.getElementById("debugButton").onclick=()=>{
   document.getElementById("cloudUrlSection").style.display="block";
 };
 
-/* Manual mode */
 document.getElementById("searchButton").onclick=async()=>{
   const file=document.getElementById("pdfFile").files[0];
   const term=document.getElementById("searchTerm").value;
@@ -1190,10 +1000,6 @@ trailer
   reader.readAsArrayBuffer(file);
 };
 
-/*
-  === AUTOMATION ENGINE ===
-*/
-
 let cumulativeAnnots=[];
 let automationRunning=false;
 
@@ -1213,8 +1019,8 @@ async function runAutomation(){
   cumulativeAnnots=[];
   let rowNum=2;
   let skippedRows=0;
-  let consecutiveEmpty=0; /* Track consecutive empty cells in column A */
-  let skipShortenedClaims=false; /* Track if we should skip Shortened claims */
+  let consecutiveEmpty=0;
+  let skipShortenedClaims=false;
 
   autoBtn.disabled=true;
   autoBtn.style.background="#cc0000";
@@ -1228,7 +1034,6 @@ async function runAutomation(){
   const sheet=wb.Sheets[wb.SheetNames[0]];
   const rows=XLSX.utils.sheet_to_json(sheet,{header:1})||[];
 
-  /* Check if A1 contains "Abbreviation" to enable abbreviation mode */
   const cellA1 = rows[0] && rows[0][0] ? rows[0][0].toString().trim().toLowerCase() : "";
   const abbreviationMode = cellA1 === "abbreviation";
   if (abbreviationMode) {
@@ -1236,8 +1041,8 @@ async function runAutomation(){
   }
 
   const prismaticMode=document.getElementById("prismaticCheck").checked;
-  const placedBoxes={};          /* Track placed text boxes per page for overlap avoidance */
-  const pageColorCounters={};    /* Track prismatic color index per page */
+  const placedBoxes={};
+  const pageColorCounters={};
 
   const pdfArray=await pdfFile.arrayBuffer();
 
@@ -1252,34 +1057,30 @@ async function runAutomation(){
     if(!rawTerm){
       consecutiveEmpty++;
       if(consecutiveEmpty>=10){
-        break; /* 10 consecutive empty cells in column A → stop */
+        break;
       }
       rowNum++;
       continue;
     }
 
-    consecutiveEmpty=0; /* Reset when non-empty cell found */
+    consecutiveEmpty=0;
 
     const term = stripLineBreaks(rawTerm.toString());
 
-    /* Handle based on column E value */
     if(claimType === "full claim"){
-      /* Full claim: try to process it */
       const matches=await extractMatches(new Uint8Array(pdfArray), term, abbreviationMode);
       
       if(matches.length > 0){
-        /* Full claim found in PDF - process it and skip subsequent shortened claims */
         if (debugMode) {
           await render(new Uint8Array(pdfArray), matches, borderHex);
         }
         const blocks=generateAnnotBlocks(matches, comment||"", borderHex, textHex, placedBoxes, prismaticMode, pageColorCounters);
         cumulativeAnnots.push(blocks);
         out.textContent=`Row ${rowNum} processed (Full claim found)...`;
-        skipShortenedClaims = true; /* Skip subsequent shortened claims */
+        skipShortenedClaims = true;
       } else {
-        /* Full claim NOT found - allow next shortened claim as fallback */
         out.textContent=`Row ${rowNum} not found (Full claim), will try shortened...`;
-        skipShortenedClaims = false; /* Allow next shortened claim */
+        skipShortenedClaims = false;
       }
       rowNum++;
       continue;
@@ -1287,13 +1088,11 @@ async function runAutomation(){
     
     if(claimType === "shortened claim"){
       if(skipShortenedClaims){
-        /* We're in skip mode - skip this shortened claim */
         out.textContent=`Row ${rowNum} skipped (Shortened claim)...`;
         skippedRows++;
         rowNum++;
         continue;
       } else {
-        /* Not in skip mode - process this shortened claim as fallback, then start skipping */
         const matches=await extractMatches(new Uint8Array(pdfArray), term, abbreviationMode);
         if (debugMode) {
           await render(new Uint8Array(pdfArray), matches, borderHex);
@@ -1301,14 +1100,13 @@ async function runAutomation(){
         const blocks=generateAnnotBlocks(matches, comment||"", borderHex, textHex, placedBoxes, prismaticMode, pageColorCounters);
         cumulativeAnnots.push(blocks);
         out.textContent=`Row ${rowNum} processed (Shortened claim fallback)...`;
-        skipShortenedClaims = true; /* Skip remaining shortened claims */
+        skipShortenedClaims = true;
         rowNum++;
         continue;
       }
     }
 
-    /* Empty column E - process normally and reset skip state */
-    skipShortenedClaims = false; /* Reset - no longer skipping */
+    skipShortenedClaims = false;
     
     const matches=await extractMatches(new Uint8Array(pdfArray), term, abbreviationMode);
     if (debugMode) {
@@ -1356,7 +1154,6 @@ trailer
   const d20Roll = Math.floor(Math.random() * 20) + 1;
   const critText = d20Roll === 20 ? " Crit!" : "";
 
-  /* Visconti Tarot - Major Arcana from local cards folder */
   const viscontiTarot = [
     { name: "The Fool", img: "cards/The_Fool.jpg" },
     { name: "The Magician", img: "cards/The_Magician.jpg" },
@@ -1409,7 +1206,6 @@ You also rolled a ${d20Roll} on a 20-sided die${critText} and drawn the ${drawnC
 
 document.getElementById("autoAnnotateButton").onclick=runAutomation;
 
-// Display selected file names
 document.getElementById("pdfFile").onchange=function(){
   const fileName = this.files[0] ? this.files[0].name : "";
   document.getElementById("pdfFileName").textContent = fileName;
@@ -1422,10 +1218,8 @@ document.getElementById("excelFile").onchange=function(){
   status.style.color = "#28a745";
 };
 
-// Cloud download integration
 const CLOUD_URL_KEY = "annomancer_cloud_url";
 
-// Load saved URL on startup
 document.addEventListener("DOMContentLoaded", function() {
   const savedUrl = localStorage.getItem(CLOUD_URL_KEY);
   if (savedUrl) {
@@ -1434,13 +1228,10 @@ document.addEventListener("DOMContentLoaded", function() {
   }
 });
 
-// Project configuration - loaded from SheetsDropdown.txt
 let PROJECT_URLS = {};
 
-// Load project configuration from external file
 async function loadProjectConfig() {
   try {
-    // Add cache-busting timestamp to always load fresh copy
     const response = await fetch('SheetsDropdown.txt?t=' + Date.now());
     if (!response.ok) {
       throw new Error('Could not load SheetsDropdown.txt');
@@ -1449,7 +1240,7 @@ async function loadProjectConfig() {
     const lines = text.trim().split('\n');
     
     const select = document.getElementById('projectSelect');
-    select.innerHTML = ''; // Clear loading option
+    select.innerHTML = '';
     
     PROJECT_URLS = {};
     
@@ -1484,10 +1275,8 @@ async function loadProjectConfig() {
   }
 }
 
-// Load config on page load
 loadProjectConfig();
 
-// Open Spreadsheet button - opens original URL in new tab
 document.getElementById("openSpreadsheetBtn").onclick = function() {
   const projectSelect = document.getElementById("projectSelect");
   const selectedProject = projectSelect.value;
@@ -1502,7 +1291,6 @@ document.getElementById("openSpreadsheetBtn").onclick = function() {
   window.open(PROJECT_URLS[selectedProject], '_blank');
 };
 
-// Save URL when it changes (for debug mode custom URLs)
 document.getElementById("cloudUrl").onchange = function() {
   const url = this.value.trim();
   if (url) {
@@ -1515,21 +1303,17 @@ document.getElementById("cloudUrl").onchange = function() {
   }
 };
 
-// Download Latest Spreadsheet button
 document.getElementById("downloadLatestBtn").onclick = function() {
   const status = document.getElementById("spreadsheetStatus");
   const projectSelect = document.getElementById("projectSelect");
   const selectedProject = projectSelect.value;
   
-  // Check for custom URL in debug mode first
   const customUrl = document.getElementById("cloudUrl").value.trim();
   let downloadUrl;
   
   if (customUrl) {
-    // Use custom URL from debug field - convert to Method 4 format
     downloadUrl = convertToDownloadUrl(customUrl);
   } else {
-    // Use project URL from config
     const originalUrl = PROJECT_URLS[selectedProject];
     
     if (!originalUrl) {
@@ -1541,7 +1325,6 @@ document.getElementById("downloadLatestBtn").onclick = function() {
     downloadUrl = convertToDownloadUrl(originalUrl);
   }
   
-  // Create a hidden anchor and click it to trigger download
   const a = document.createElement('a');
   a.href = downloadUrl;
   a.target = '_blank';
@@ -1554,29 +1337,22 @@ document.getElementById("downloadLatestBtn").onclick = function() {
   status.style.color = "#0078d4";
 };
 
-// Select Downloaded File button
 document.getElementById("selectDownloadedBtn").onclick = function() {
   document.getElementById("excelFile").click();
 };
 
-/* Convert SharePoint URL to Method 4 (UniqueId) format */
 function convertToDownloadUrl(url) {
-  /* If already a download.aspx URL, return as-is */
   if (url.includes('download.aspx')) {
     return url;
   }
   
-  /* SharePoint formats - extract UniqueId from d= parameter */
   if (url.includes('.sharepoint.com')) {
-    /* Look for d=w... parameter which contains the UniqueId */
     const dMatch = url.match(/[?&]d=w([a-f0-9]+)/i);
     if (dMatch) {
-      /* Extract the hex string and format as GUID */
       const hex = dMatch[1];
       if (hex.length >= 32) {
         const guid = hex.slice(0,8) + '-' + hex.slice(8,12) + '-' + hex.slice(12,16) + '-' + hex.slice(16,20) + '-' + hex.slice(20,32);
         
-        /* Extract the personal/site path */
         const pathMatch = url.match(/(\/personal\/[^\/]+)/);
         if (pathMatch) {
           const baseDomain = url.match(/(https?:\/\/[^\/]+)/)[1];
@@ -1585,12 +1361,10 @@ function convertToDownloadUrl(url) {
       }
     }
     
-    /* Fallback: add download=1 */
     const separator = url.includes('?') ? '&' : '?';
     return url + separator + 'download=1';
   }
   
-  /* Egnyte formats */
   if (url.includes('.egnyte.com')) {
     if (url.includes('/fl/')) {
       return url.replace('/fl/', '/dd/');
@@ -1600,7 +1374,6 @@ function convertToDownloadUrl(url) {
     }
   }
   
-  /* Default: return as-is */
   return url;
 }
 
@@ -1626,7 +1399,6 @@ async function runStepOnce(r){
   const sheet=wb.Sheets[wb.SheetNames[0]];
   const rows=XLSX.utils.sheet_to_json(sheet,{header:1})||[];
 
-  /* Check if A1 contains "Abbreviation" to enable abbreviation mode */
   const cellA1 = rows[0] && rows[0][0] ? rows[0][0].toString().trim().toLowerCase() : "";
   const abbreviationMode = cellA1 === "abbreviation";
 
