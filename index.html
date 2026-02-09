@@ -163,7 +163,7 @@
 
 <body>
 
-<div class="version-tag">Metal v46</div>
+<div class="version-tag">Metal v47</div>
 
 <img src="masthead.png" alt="Annomancer" style="max-width: 100%; width: 768px; height: auto; margin-bottom: 10px;">
 <p>A little science. A little magic. A roll of the dice. Boom. You've got annos.</p>
@@ -321,7 +321,7 @@ function setFont(px,fam){ mctx.font=px+"px "+(fam||"sans-serif"); }
 function measure(t){ return mctx.measureText(t).width||0; }
 
 /* ================================================
-   METAL v45 - GREEDY SEQUENTIAL SEARCH ENGINE
+   METAL v47 - GREEDY SEQUENTIAL SEARCH ENGINE
    Supports up to 600 words with up to 12 line breaks
    Position-aware: segments must be sequential in PDF
    Strict proximity: max 4x line height gap, max 25 lines total
@@ -335,6 +335,8 @@ function measure(t){ return mctx.measureText(t).width||0; }
      - Empty → process normally, reset skip state
    Abbreviation mode: If A1="Abbreviation", require word boundaries
    Cloud: Projects loaded from SheetsDropdown.txt
+   v47: Improved line routing (H/V preferred, corner margin
+         preference, crossing avoidance), prismatic text color fix
    ================================================ */
 async function extractMatches(pdfData, term, abbreviationMode = false){
   const pdf = await pdfjsLib.getDocument({data: pdfData}).promise;
@@ -779,6 +781,107 @@ function makeLineAnnot(lx1,ly1,lx2,ly2,page,colorFloats){
 >>`;
 }
 
+/* === v47: Create a routed line using H/V segments with an optional single bend ===
+   Produces 1 line (straight H or V) or 2 lines (L-shaped bend) or 1 diagonal as fallback.
+   Returns an array of line annotation strings. */
+function makeRoutedLine(fromX, fromY, toX, toY, page, colorFloats, placedLines) {
+  const lines = [];
+  
+  /* If already horizontal or vertical, just draw it */
+  const dx = Math.abs(fromX - toX);
+  const dy = Math.abs(fromY - toY);
+  
+  if (dx < 2) {
+    /* Nearly vertical */
+    lines.push(makeLineAnnot(fromX, fromY, fromX, toY, page, colorFloats));
+    if (placedLines) placedLines.push({x1:fromX,y1:fromY,x2:fromX,y2:toY});
+    return lines;
+  }
+  if (dy < 2) {
+    /* Nearly horizontal */
+    lines.push(makeLineAnnot(fromX, fromY, toX, fromY, page, colorFloats));
+    if (placedLines) placedLines.push({x1:fromX,y1:fromY,x2:toX,y2:fromY});
+    return lines;
+  }
+  
+  /* Need an L-shaped bend. Two options:
+     Option A: horizontal first, then vertical (bend at toX, fromY)
+     Option B: vertical first, then horizontal (bend at fromX, toY) */
+  
+  const bendA = { x: toX, y: fromY }; /* H then V */
+  const bendB = { x: fromX, y: toY }; /* V then H */
+  
+  /* Score each option by counting crossings with existing lines */
+  function countCrossings(segments) {
+    if (!placedLines || placedLines.length === 0) return 0;
+    let crossings = 0;
+    for (const seg of segments) {
+      for (const existing of placedLines) {
+        if (segmentsIntersect(seg.x1,seg.y1,seg.x2,seg.y2, existing.x1,existing.y1,existing.x2,existing.y2)) {
+          crossings++;
+        }
+      }
+    }
+    return crossings;
+  }
+  
+  const segsA = [
+    {x1:fromX, y1:fromY, x2:bendA.x, y2:bendA.y},
+    {x1:bendA.x, y1:bendA.y, x2:toX, y2:toY}
+  ];
+  const segsB = [
+    {x1:fromX, y1:fromY, x2:bendB.x, y2:bendB.y},
+    {x1:bendB.x, y1:bendB.y, x2:toX, y2:toY}
+  ];
+  
+  const crossA = countCrossings(segsA);
+  const crossB = countCrossings(segsB);
+  
+  let chosen;
+  if (crossA < crossB) {
+    chosen = segsA;
+  } else if (crossB < crossA) {
+    chosen = segsB;
+  } else {
+    /* Tie-break: prefer the option where the longer segment is H or V
+       in the dominant direction (usually H first for side placements,
+       V first for top/bottom) */
+    chosen = dx > dy ? segsA : segsB;
+  }
+  
+  for (const seg of chosen) {
+    lines.push(makeLineAnnot(seg.x1, seg.y1, seg.x2, seg.y2, page, colorFloats));
+    if (placedLines) placedLines.push(seg);
+  }
+  
+  return lines;
+}
+
+/* Segment intersection test (for crossing detection) */
+function segmentsIntersect(ax1,ay1,ax2,ay2, bx1,by1,bx2,by2) {
+  /* Skip if segments share an endpoint (connected, not crossing) */
+  const EPS = 0.5;
+  if ((Math.abs(ax1-bx1)<EPS && Math.abs(ay1-by1)<EPS) ||
+      (Math.abs(ax1-bx2)<EPS && Math.abs(ay1-by2)<EPS) ||
+      (Math.abs(ax2-bx1)<EPS && Math.abs(ay2-by1)<EPS) ||
+      (Math.abs(ax2-bx2)<EPS && Math.abs(ay2-by2)<EPS)) {
+    return false;
+  }
+  
+  function cross(ox,oy, ax,ay, bx,by) {
+    return (ax-ox)*(by-oy) - (ay-oy)*(bx-ox);
+  }
+  const d1 = cross(bx1,by1,bx2,by2,ax1,ay1);
+  const d2 = cross(bx1,by1,bx2,by2,ax2,ay2);
+  const d3 = cross(ax1,ay1,ax2,ay2,bx1,by1);
+  const d4 = cross(ax1,ay1,ax2,ay2,bx2,by2);
+  
+  if (((d1>0&&d2<0)||(d1<0&&d2>0)) && ((d3>0&&d4<0)||(d3<0&&d4>0))) {
+    return true;
+  }
+  return false;
+}
+
 function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBoxes, prismaticMode, pageColorCounters){
   placedBoxes=placedBoxes||{};
   pageColorCounters=pageColorCounters||{};
@@ -786,7 +889,9 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBox
   const comment=escComment(rawComment);
   const BORDER_DEF=hexToRgbFloats(borderHex);
   const TEXT_DEF=hexToRgbFloats(textHex);
-  const TEXT_RED="1 0 0"; /* red for prismatic text */
+
+  /* Track placed lines per page for crossing avoidance */
+  const placedLines = {};
 
   console.log("[Annomancer-FB] generateAnnotBlocks called, matches="+matches.length+", comment length="+rawComment.length+", prismatic="+!!prismaticMode);
 
@@ -800,6 +905,9 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBox
     const PH=m.pageHeight||792;
 
     /* === Prismatic color selection === */
+    /* FIX v47: In prismatic mode, text color inside the FreeText box now uses
+       the prismatic border color (matching the square annotation), NOT always red.
+       Previously TEXT_C was hardcoded to "1 0 0" (red) for all prismatic text boxes. */
     let BORDER, TEXT_C, textHexForDS;
     if(prismaticMode){
       if(!pageColorCounters[pageNum]) pageColorCounters[pageNum]=0;
@@ -807,8 +915,8 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBox
       pageColorCounters[pageNum]++;
       const pHex=PRISMATIC_PALETTE[ci];
       BORDER=hexToRgbFloats(pHex);
-      TEXT_C=TEXT_RED;
-      textHexForDS="#FF0000";
+      TEXT_C=BORDER;          /* v47 FIX: text matches border color */
+      textHexForDS=pHex;      /* v47 FIX: DS hex matches border color */
     } else {
       BORDER=BORDER_DEF;
       TEXT_C=TEXT_DEF;
@@ -867,20 +975,44 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBox
     const cTop=m.contentTop||(PH-36);
     const cBot=m.contentBottom||36;
     const contentHeight=cTop-cBot;
-    const wordCenter=(x1+x2)/2;
+    const wordCenterX=(x1+x2)/2;
+    const wordCenterY=(y1+y2)/2;
     const MARGIN_GAP=4, MIN_VERT_MARGIN=50;
 
     const topMarginSize=PH-cTop;
     const bottomMarginSize=cBot;
+    const leftMarginSize=mL;
+    const rightMarginSize=PW-mR;
     const nearTopThreshold=cTop-contentHeight*0.2;
     const nearBotThreshold=cBot+contentHeight*0.2;
     const wordNearTop=y2>nearTopThreshold && topMarginSize>=MIN_VERT_MARGIN;
     const wordNearBot=y1<nearBotThreshold && bottomMarginSize>=MIN_VERT_MARGIN;
 
+    /* v47: Corner detection - if word is near both top/bottom AND a side,
+       prefer side margins over top/bottom for cleaner H/V lines */
+    const nearLeftEdge = wordCenterX < mL + (mR - mL) * 0.3;
+    const nearRightEdge = wordCenterX > mR - (mR - mL) * 0.3;
+    const inCorner = (wordNearTop || wordNearBot) && (nearLeftEdge || nearRightEdge);
+
     let l, r, t, b;
     let side;
 
-    if(wordNearTop){
+    if (inCorner) {
+      /* Corner content: prefer side margins over top/bottom */
+      if (wordCenterX < PW / 2) {
+        side = "LEFT";
+        r = mL - MARGIN_GAP;
+        l = Math.max(2, r - boxW);
+        if (r - l < 40) { r = mL + 20; l = Math.max(2, r - boxW); }
+        t = y2; b = t - boxH;
+      } else {
+        side = "RIGHT";
+        l = mR + MARGIN_GAP;
+        r = Math.min(PW - 2, l + boxW);
+        if (r - l < 40) { l = mR - 20; r = Math.min(PW - 2, l + boxW); }
+        t = y2; b = t - boxH;
+      }
+    } else if(wordNearTop){
       side="TOP";
       l=Math.max(2, x1);
       r=Math.min(PW-2, l+boxW);
@@ -892,7 +1024,7 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBox
       r=Math.min(PW-2, l+boxW);
       t=cBot-MARGIN_GAP;
       b=Math.max(2, t-boxH);
-    } else if(wordCenter<PW/2){
+    } else if(wordCenterX<PW/2){
       side="LEFT";
       r=mL-MARGIN_GAP;
       l=Math.max(2, r-boxW);
@@ -920,18 +1052,27 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBox
     /* Record this text box for future overlap checks */
     placedBoxes[pageNum].push({l,b,r,t});
 
-    /* === Connecting line (may be diagonal after overlap shift) ===
-       Line goes from text box edge midpoint to square edge midpoint. */
-    let lineAnnot;
+    /* === v47: Routed connecting line (H/V preferred, crossing avoidance) ===
+       Line goes from text box edge midpoint to square edge midpoint.
+       Uses L-shaped routing instead of diagonal when possible. */
+    if (!placedLines[pageNum]) placedLines[pageNum] = [];
+    
+    let fromX, fromY, toX, toY;
     if(side==="TOP"){
-      lineAnnot=makeLineAnnot((l+r)/2, b, wordCenter, y2, p, BORDER);
+      fromX = (l+r)/2; fromY = b;
+      toX = wordCenterX; toY = y2;
     } else if(side==="BOTTOM"){
-      lineAnnot=makeLineAnnot(wordCenter, y1, (l+r)/2, t, p, BORDER);
+      fromX = (l+r)/2; fromY = t;
+      toX = wordCenterX; toY = y1;
     } else if(side==="LEFT"){
-      lineAnnot=makeLineAnnot(r, (b+t)/2, x1, (y1+y2)/2, p, BORDER);
+      fromX = r; fromY = (b+t)/2;
+      toX = x1; toY = (y1+y2)/2;
     } else {
-      lineAnnot=makeLineAnnot(x2, (y1+y2)/2, l, (b+t)/2, p, BORDER);
+      fromX = l; fromY = (b+t)/2;
+      toX = x2; toY = (y1+y2)/2;
     }
+    
+    const lineAnnots = makeRoutedLine(fromX, fromY, toX, toY, p, BORDER, placedLines[pageNum]);
 
     console.log("[Annomancer-FB] Match #"+idx+": → "+side+(prismaticMode?" [prismatic]":"")+" | textBox=["+l.toFixed(1)+","+b.toFixed(1)+","+r.toFixed(1)+","+t.toFixed(1)+"]");
 
@@ -951,7 +1092,7 @@ function generateAnnotBlocks(matches, commentText, borderHex, textHex, placedBox
 /BS << /W 2 >>
 >>`;
 
-    return square + "\n" + freeText + "\n" + lineAnnot;
+    return square + "\n" + freeText + "\n" + lineAnnots.join("\n");
 
   }).join("\n");
 }
