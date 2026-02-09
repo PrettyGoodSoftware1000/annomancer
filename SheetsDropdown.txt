@@ -1,22 +1,13 @@
-Edwards Patient FCB: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_fcbcure_com/Documents/file.xlsx?d=w697c6e2d183146e2ae853bef83f3bd2c&csf=1&web=1&e=60Jm15
+
 Edwards Patient NEON: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_neon-nyc_com/Documents/file.xlsx?d=w697c6e2d183146e2ae853bef83f3bd2c&csf=1&web=1&e=60Jm15
 
 
-Edwards HCP FCB: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_fcbcure_com/Documents/Edwards%20HCP.xlsx?d=w9dd4e3da5d924fc89531327e9a8f41fa&csf=1&web=1&e=jpSuNI
-Edwards HCP Neon: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_neon-nyc_com/Documents/Edwards%20HCP.xlsx?d=w9dd4e3da5d924fc89531327e9a8f41fa&csf=1&web=1&e=jpSuNI
+Edwards HCP: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_neon-nyc_com/Documents/Edwards%20HCP.xlsx?d=w9dd4e3da5d924fc89531327e9a8f41fa&csf=1&web=1&e=jpSuNI
 
-Merck HIV Patient FCB: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_fcbcure_com/Documents/Merck%20HIV%20Patient.xlsx?d=w6bade87118e441fc9795266f6542a42e&csf=1&web=1&e=wmeIui
-Merck HIV Patient NEON: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_neon-nyc_com/Documents/Merck%20HIV%20Patient.xlsx?d=w6bade87118e441fc9795266f6542a42e&csf=1&web=1&e=xUYHhI
+Merck HIV Patient: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_neon-nyc_com/Documents/Merck%20HIV%20Patient.xlsx?d=w6bade87118e441fc9795266f6542a42e&csf=1&web=1&e=xUYHhI
 
+Wainua Patient: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_fcbcure_com/Documents/Wainua%20Patient.xlsx?d=wa667174706644164a5dd8a68ae73e49f&csf=1&web=1&e=uhFA70
 
+Gibberish to English: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_neon-nyc_com/Documents/Gibberish%20to%20English%20Translation.xlsx?d=w383529178cad423182e6215102814e15&csf=1&web=1&e=6oknk2
 
-Wainua Patient FCB: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_fcbcure_com/Documents/Wainua%20Patient.xlsx?d=wa667174706644164a5dd8a68ae73e49f&csf=1&web=1&e=uhFA70
-Wainua Patient NEON: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_fcbcure_com/Documents/Wainua%20Patient.xlsx?d=wa667174706644164a5dd8a68ae73e49f&csf=1&web=1&e=uhFA70
-
-
-Gibberish to English FCB: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_fcbcure_com/Documents/Gibberish%20to%20English%20Translation.xlsx?d=w383529178cad423182e6215102814e15&csf=1&web=1&e=6oknk2
-Gibberish to English NEON: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_neon-nyc_com/Documents/Gibberish%20to%20English%20Translation.xlsx?d=w383529178cad423182e6215102814e15&csf=1&web=1&e=6oknk2
-
-Developer FCB: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_fcbcure_com/Documents/Developer.xlsx?d=w67e8f03eb941447ba8127f8a2387f782&csf=1&web=1&e=KTdcVE
-Developer NEON: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_neon-nyc_com/Documents/Developer.xlsx?d=w67e8f03eb941447ba8127f8a2387f782&csf=1&web=1&e=KTdcVE
-
+Developer 1: https://interpublic-my.sharepoint.com/:x:/r/personal/mark_habke_neon-nyc_com/Documents/Developer.xlsx?d=w67e8f03eb941447ba8127f8a2387f782&csf=1&web=1&e=KTdcVE
