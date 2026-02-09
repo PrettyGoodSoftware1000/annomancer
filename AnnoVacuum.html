@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<title>Anno-vacuum</title>
+<script src="pdf.js"></script>
+<script src="xlsx.full.min.js"></script>
+<style>
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+    background: #f5f6fa;
+    color: #222;
+    text-align: center;
+    padding: 30px;
+  }
+  button {
+    margin: 10px;
+    padding: 12px 20px;
+    border-radius: 6px;
+    border: none;
+    font-size: 16px;
+    cursor: pointer;
+    color: #fff;
+    background: #0078ff;
+  }
+  button:hover { background: #005fd1; }
+  button:disabled { background: #aaa; cursor: default; }
+  .custom-file-input { display: inline-block; }
+  .custom-file-input input[type="file"] { display: none; }
+  .custom-file-input label {
+    display: inline-block;
+    padding: 12px 20px;
+    background: #0078ff;
+    color: #fff;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    margin: 10px;
+  }
+  .custom-file-input label:hover { background: #005fd1; }
+  .file-name { margin-left: 10px; font-style: italic; color: #666; }
+  #status {
+    margin: 20px auto;
+    max-width: 700px;
+    font-size: 15px;
+    text-align: left;
+    background: #fff;
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    white-space: pre-wrap;
+    display: none;
+  }
+  #extractBtn { display: none; }
+  #downloadSection { display: none; margin-top: 20px; }
+  .back-link { display: inline-block; margin-bottom: 20px; color: #0078ff; text-decoration: none; }
+  .back-link:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<a href="index.html" class="back-link">← Back to Annomancer</a>
+
+<h1>🌀 Anno-vacuum</h1>
+<p>Upload a color-coded PDF and extract annotations into a spreadsheet.</p>
+
+<div class="custom-file-input">
+  <label for="pdfFile">Upload a Color-Coded PDF</label>
+  <input type="file" id="pdfFile" accept="application/pdf" />
+  <span id="pdfFileName" class="file-name"></span>
+</div>
+<br>
+
+<button id="extractBtn">Extract Annos</button>
+
+<div id="status"></div>
+
+<div id="downloadSection">
+  <a id="downloadLink" href="#">
+    <button type="button" style="background:#28a745;">⬇️ Download Spreadsheet</button>
+  </a>
+</div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = "pdf.worker.js";
+
+const pdfInput = document.getElementById("pdfFile");
+const extractBtn = document.getElementById("extractBtn");
+const status = document.getElementById("status");
+const downloadSection = document.getElementById("downloadSection");
+const downloadLink = document.getElementById("downloadLink");
+
+pdfInput.onchange = function() {
+  const name = this.files[0] ? this.files[0].name : "";
+  document.getElementById("pdfFileName").textContent = name;
+  if (this.files[0]) {
+    extractBtn.style.display = "inline-block";
+    downloadSection.style.display = "none";
+    status.style.display = "none";
+  }
+};
+
+extractBtn.onclick = async function() {
+  const file = pdfInput.files[0];
+  if (!file) return;
+
+  extractBtn.disabled = true;
+  extractBtn.textContent = "Extracting...";
+  status.style.display = "block";
+  status.textContent = "Loading PDF and reading annotations...\n";
+  downloadSection.style.display = "none";
+
+  try {
+    const arrayBuf = await file.arrayBuffer();
+    const data = new Uint8Array(arrayBuf);
+    const results = await extractAnnotations(data);
+
+    if (results.length === 0) {
+      status.textContent += "\nNo color-coded annotation pairs found.";
+      extractBtn.disabled = false;
+      extractBtn.textContent = "Extract Annos";
+      return;
+    }
+
+    status.textContent += `\nFound ${results.length} annotation pair(s). Building spreadsheet...\n`;
+    const xlsxBlob = buildSpreadsheet(results);
+    const url = URL.createObjectURL(xlsxBlob);
+    const pdfName = file.name.replace(/\.pdf$/i, "");
+    downloadLink.href = url;
+    downloadLink.setAttribute("download", pdfName + " extracted.xlsx");
+    downloadSection.style.display = "block";
+    status.textContent += "Done! Click below to download.";
+  } catch (err) {
+    status.textContent += "\nError: " + err.message;
+    console.error(err);
+  }
+
+  extractBtn.disabled = false;
+  extractBtn.textContent = "Extract Annos";
+};
+
+/* ============================================================
+   CORE: Extract annotations from a PDF
+   Finds Square annotations (boxes around text) and matches
+   them with FreeText annotations (text boxes) on the same
+   page that share the same border color.
+   ============================================================ */
+async function extractAnnotations(pdfData) {
+  const loadingTask = pdfjsLib.getDocument({ data: pdfData });
+  const pdf = await loadingTask.promise;
+  const results = [];
+
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const annotations = await page.getAnnotations();
+    const textContent = await page.getTextContent();
+
+    status.textContent += `Page ${pageNum}: ${annotations.length} annotation(s)...\n`;
+
+    /* Classify annotations by type */
+    const squares = [];   /* Square/rect annotations around PDF text */
+    const freeTexts = [];  /* FreeText annotations (comment boxes) */
+
+    for (const annot of annotations) {
+      const subtype = annot.subtype;
+
+      if (subtype === "Square") {
+        squares.push(annot);
+      } else if (subtype === "FreeText") {
+        freeTexts.push(annot);
+      }
+    }
+
+    if (squares.length === 0) continue;
+
+    /* Extract text under each Square annotation from the page's text content */
+    const vp = page.getViewport({ scale: 1 });
+
+    for (const sq of squares) {
+      const rect = sq.rect; /* [x1, y1, x2, y2] in PDF coords */
+      if (!rect || rect.length < 4) continue;
+
+      const sqLeft = Math.min(rect[0], rect[2]);
+      const sqRight = Math.max(rect[0], rect[2]);
+      const sqBottom = Math.min(rect[1], rect[3]);
+      const sqTop = Math.max(rect[1], rect[3]);
+
+      /* Get the border/stroke color of this Square */
+      const sqColor = normalizeColor(annot_color(sq));
+
+      /* Find text items that fall within this square's rect */
+      const coveredText = [];
+      for (const item of textContent.items) {
+        const T = item.transform;
+        const ix = T[4];
+        const iy = T[5];
+        const iw = item.width || 0;
+        const ih = Math.abs(T[3]) || Math.abs(T[0]) || 10;
+
+        /* Item bounding box */
+        const itemLeft = ix;
+        const itemRight = ix + iw;
+        const itemBottom = iy - ih * 0.22;
+        const itemTop = iy + ih;
+
+        /* Check substantial overlap */
+        const overlapX = Math.max(0, Math.min(sqRight, itemRight) - Math.max(sqLeft, itemLeft));
+        const overlapY = Math.max(0, Math.min(sqTop, itemTop) - Math.max(sqBottom, itemBottom));
+        const itemArea = Math.max(1, (itemRight - itemLeft) * (itemTop - itemBottom));
+        const overlapRatio = (overlapX * overlapY) / itemArea;
+
+        if (overlapRatio > 0.4) {
+          coveredText.push({ text: item.str, x: ix, y: iy });
+        }
+      }
+
+      if (coveredText.length === 0) continue;
+
+      /* Sort by position: top-to-bottom (descending Y), then left-to-right */
+      coveredText.sort((a, b) => {
+        const dy = b.y - a.y;
+        if (Math.abs(dy) > 3) return dy;
+        return a.x - b.x;
+      });
+
+      const extractedText = coveredText.map(c => c.text).join(" ").trim();
+      if (!extractedText) continue;
+
+      /* Find matching FreeText with same color on same page */
+      let matchedComment = "";
+      let bestDist = Infinity;
+
+      for (const ft of freeTexts) {
+        const ftColor = normalizeColor(annot_color(ft));
+
+        if (!colorsMatch(sqColor, ftColor)) continue;
+
+        /* If multiple FreeTexts match the color, pick the closest one */
+        const ftRect = ft.rect || [0, 0, 0, 0];
+        const ftCX = (ftRect[0] + ftRect[2]) / 2;
+        const ftCY = (ftRect[1] + ftRect[3]) / 2;
+        const sqCX = (sqLeft + sqRight) / 2;
+        const sqCY = (sqBottom + sqTop) / 2;
+        const dist = Math.hypot(ftCX - sqCX, ftCY - sqCY);
+
+        if (dist < bestDist) {
+          bestDist = dist;
+          matchedComment = ft.contentsObj ? ft.contentsObj.str || "" : (ft.contents || "");
+        }
+      }
+
+      results.push({
+        page: pageNum,
+        text: extractedText,
+        comment: matchedComment,
+        color: sqColor
+      });
+    }
+  }
+
+  return results;
+}
+
+/* Get the annotation's border/stroke color.
+   pdf.js exposes color in different ways depending on annotation type. */
+function annot_color(annot) {
+  /* Try borderColor first (for Square annotations) */
+  if (annot.borderColor) {
+    return annot.borderColor;
+  }
+  /* Try color property */
+  if (annot.color) {
+    return annot.color;
+  }
+  /* FreeText: try to parse from borderStyle or default appearance */
+  if (annot.borderStyle && annot.borderStyle.color) {
+    return annot.borderStyle.color;
+  }
+  return null;
+}
+
+/* Normalize a color to [r,g,b] array with values 0-255 */
+function normalizeColor(c) {
+  if (!c) return [0, 0, 0];
+
+  /* pdf.js often returns Uint8ClampedArray or regular array with 0-255 values,
+     but sometimes returns float arrays 0-1. Handle both. */
+  let arr;
+  if (c instanceof Uint8ClampedArray || Array.isArray(c)) {
+    arr = Array.from(c);
+  } else {
+    return [0, 0, 0];
+  }
+
+  if (arr.length < 3) return [0, 0, 0];
+
+  /* If values are all <= 1 and at least one is non-zero and non-integer,
+     assume 0-1 float range */
+  const maxVal = Math.max(...arr.slice(0, 3));
+  if (maxVal <= 1.0 && arr.slice(0, 3).some(v => v > 0 && v !== Math.floor(v))) {
+    return [Math.round(arr[0] * 255), Math.round(arr[1] * 255), Math.round(arr[2] * 255)];
+  }
+
+  return [Math.round(arr[0]), Math.round(arr[1]), Math.round(arr[2])];
+}
+
+/* Check if two normalized colors are close enough to be "the same" */
+function colorsMatch(c1, c2) {
+  if (!c1 || !c2) return false;
+  const TOLERANCE = 30; /* allow small differences from rounding */
+  return Math.abs(c1[0] - c2[0]) <= TOLERANCE &&
+         Math.abs(c1[1] - c2[1]) <= TOLERANCE &&
+         Math.abs(c1[2] - c2[2]) <= TOLERANCE;
+}
+
+/* ============================================================
+   Build an XLSX spreadsheet from extracted results
+   Column A = text found inside square annotations
+   Column C = text from matched FreeText annotations
+   ============================================================ */
+function buildSpreadsheet(results) {
+  const wb = XLSX.utils.book_new();
+  const wsData = [["Text from PDF", "", "Annotation Comment"]];
+
+  for (const r of results) {
+    wsData.push([r.text, "", r.comment]);
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+  /* Column widths */
+  ws["!cols"] = [
+    { wch: 60 },  /* A */
+    { wch: 5 },   /* B spacer */
+    { wch: 60 }   /* C */
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, "Extracted Annotations");
+  const wbOut = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  return new Blob([wbOut], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+</script>
+
+</body>
+</html>
