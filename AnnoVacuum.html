@@ -68,7 +68,7 @@
 </head>
 <body>
 
-<div class="version-tag">Herbert v4</div>
+<div class="version-tag">Herbert v1</div>
 
 <a href="index.html" class="back-link">← Back to Annomancer</a>
 
@@ -776,6 +776,22 @@ function buildAnnotOutput(entry, color) {
       out.colorBC = color;
       if (!out.colorC || (out.colorC[0] > 0.9 && out.colorC[1] > 0.9 && out.colorC[2] > 0.9)) {
         out.colorC = [1.0, 1.0, 0.988235];
+      }
+      /* Rewrite /DA: replace the color portion (r g b rg) with new color.
+         /DA format is typically "r g b rg /FontName size Tf" */
+      const colorRgStr = color.map(v => Math.round(v * 1000000) / 1000000).join(' ');
+      if (out.da) {
+        /* Replace existing "r g b rg" pattern */
+        out.da = out.da.replace(/[\d.]+ [\d.]+ [\d.]+ rg/, colorRgStr + ' rg');
+      } else {
+        out.da = colorRgStr + ' rg /Arial 10 Tf';
+      }
+      /* Rewrite /DS: replace color:#XXXXXX with new hex color */
+      const hexColor = '#' + color.map(v => Math.round(v * 255).toString(16).padStart(2, '0')).join('');
+      if (out.ds) {
+        out.ds = out.ds.replace(/color:\s*#[0-9a-fA-F]{6}/, 'color:' + hexColor);
+      } else {
+        out.ds = 'font: Arial,sans-serif 10.0pt; text-align:left; color:' + hexColor;
       }
     } else if (entry.subtype === 'Line') {
       out.colorC = color;
