@@ -53,7 +53,7 @@
     white-space: pre-wrap;
     display: none;
   }
-  #extractBtn { display: none; }
+  #extractBtn, #colorizeBtn { display: none; }
   #downloadSection { display: none; margin-top: 20px; }
   .version-tag {
     position: absolute;
@@ -83,12 +83,19 @@
 <br>
 
 <button id="extractBtn">Extract Annos</button>
+<button id="colorizeBtn" style="background:#911EB4;">Colorize</button>
 
 <div id="status"></div>
 
 <div id="downloadSection">
   <a id="downloadLink" href="#">
     <button type="button" style="background:#28a745;">⬇️ Download Spreadsheet</button>
+  </a>
+</div>
+
+<div id="colorizeDownloadSection" style="display:none; margin-top:20px;">
+  <a id="colorizeDownloadLink" href="#">
+    <button type="button" style="background:#911EB4;">⬇️ Download Colorized FDF</button>
   </a>
 </div>
 
@@ -119,7 +126,9 @@ pdfInput.onchange = function() {
   document.getElementById("pdfFileName").textContent = name;
   if (this.files[0]) {
     extractBtn.style.display = "inline-block";
+    document.getElementById("colorizeBtn").style.display = "inline-block";
     downloadSection.style.display = "none";
+    document.getElementById("colorizeDownloadSection").style.display = "none";
     status.style.display = "none";
   }
 };
@@ -406,10 +415,13 @@ function readColorArray(obj) {
 /* ── Helper: Read a PDF string value ── */
 function readPdfString(obj) {
   if (!obj) return '';
-  if (typeof obj.asString === 'function') return obj.asString();
-  if (obj instanceof PDFHexString) return obj.decodeText();
-  if (obj instanceof PDFString) return obj.asString();
-  return obj.toString();
+  let s;
+  if (typeof obj.asString === 'function') s = obj.asString();
+  else if (obj instanceof PDFHexString) s = obj.decodeText();
+  else if (obj instanceof PDFString) s = obj.asString();
+  else s = obj.toString();
+  /* FDF encodes line breaks as \r — convert back to real newlines */
+  return s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
 /* ── Color key: round floats for reliable comparison ── */
@@ -440,6 +452,393 @@ function buildSpreadsheet(results) {
   XLSX.utils.book_append_sheet(wb, ws, "Extracted Annotations");
   const wbOut = XLSX.write(wb, { bookType: "xlsx", type: "array" });
   return new Blob([wbOut], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
+/* ============================================================
+   COLORIZE: Apply Annomancer-style color coding to an
+   uncolored annotated PDF.
+
+   1. Read all annotations (Square, FreeText, Line) with pdf-lib
+   2. On each page, assign a unique prismatic color to each Square
+   3. Match each Square to a FreeText via:
+      a. Find a Line annotation that connects them (endpoints near both)
+      b. Fallback: nearest FreeText to the left or right
+   4. Apply the Square's color to its matched FreeText (/BC) and Line (/C)
+   5. Output as FDF for download
+   ============================================================ */
+
+/* Same prismatic palette as Annomancer */
+const PRISMATIC_PALETTE = [
+  [0.9019, 0.0980, 0.2941],
+  [0.2353, 0.7059, 0.2941],
+  [0.2627, 0.3882, 0.8471],
+  [0.9608, 0.5098, 0.1922],
+  [0.5686, 0.1176, 0.7059],
+  [0.2588, 0.8314, 0.9569],
+  [0.9412, 0.1961, 0.9020],
+  [0.2745, 0.6000, 0.5647],
+  [0.6039, 0.3882, 0.1412],
+  [0.5020, 0.0000, 0.0000],
+  [0.0000, 0.0000, 0.4588],
+  [0.5020, 0.5020, 0.0000],
+  [0.1294, 0.5882, 0.9529],
+  [1.0000, 0.3412, 0.1333],
+  [0.0000, 0.5882, 0.5333],
+  [0.4745, 0.3333, 0.2824],
+  [0.3765, 0.4902, 0.5451],
+  [0.5451, 0.7647, 0.2902],
+  [1.0000, 0.5961, 0.0000],
+  [0.1843, 0.3098, 0.3098]
+];
+
+document.getElementById("colorizeBtn").onclick = async function() {
+  const file = pdfInput.files[0];
+  if (!file) return;
+
+  const btn = document.getElementById("colorizeBtn");
+  btn.disabled = true;
+  btn.textContent = "Colorizing...";
+  status.style.display = "block";
+  status.textContent = "Loading PDF for colorization...\n";
+  document.getElementById("colorizeDownloadSection").style.display = "none";
+
+  try {
+    const arrayBuf = await file.arrayBuffer();
+    const data = new Uint8Array(arrayBuf);
+    await new Promise(r => setTimeout(r, 50));
+
+    const fdfContent = await colorizeAnnotations(data);
+    const blob = new Blob([fdfContent], { type: 'application/vnd.fdf' });
+    const url = URL.createObjectURL(blob);
+    const pdfName = file.name.replace(/\.pdf$/i, "");
+    const dlLink = document.getElementById("colorizeDownloadLink");
+    dlLink.href = url;
+    dlLink.setAttribute("download", pdfName + " colorized.fdf");
+    document.getElementById("colorizeDownloadSection").style.display = "block";
+    status.textContent += "Done! Download the colorized FDF below.";
+  } catch (err) {
+    status.textContent += "\nError: " + err.message;
+    console.error(err);
+  }
+
+  btn.disabled = false;
+  btn.textContent = "Colorize";
+};
+
+async function colorizeAnnotations(pdfData) {
+  ensurePdfLib();
+
+  status.textContent += "Reading annotations...\n";
+  const pdfLib2 = await PDFDocument.load(pdfData, { ignoreEncryption: true });
+  const pages2 = pdfLib2.getPages();
+
+  const pageAnnots = {};
+
+  for (let pageIdx = 0; pageIdx < pages2.length; pageIdx++) {
+    const page = pages2[pageIdx];
+    const annotsRef = page.node.get(PDFName.of('Annots'));
+    if (!annotsRef) continue;
+
+    const annots = page.node.lookup(PDFName.of('Annots'));
+    if (!annots || !(annots instanceof PDFArray)) continue;
+
+    pageAnnots[pageIdx] = { squares: [], freeTexts: [], lines: [], all: [] };
+
+    for (let j = 0; j < annots.size(); j++) {
+      try {
+        const annotRef = annots.get(j);
+        const annotDict = pdfLib2.context.lookup(annotRef);
+        if (!(annotDict instanceof PDFDict)) continue;
+
+        const subtype = annotDict.get(PDFName.of('Subtype'));
+        if (!subtype) continue;
+        const subtypeStr = subtype.asString().replace('/', '');
+
+        const rect = readRectArray(annotDict.get(PDFName.of('Rect')));
+        if (!rect) continue;
+
+        const entry = { subtype: subtypeStr, rect: rect, dict: annotDict, page: pageIdx };
+
+        if (subtypeStr === 'Line') {
+          const lineL = annotDict.get(PDFName.of('L'));
+          if (lineL && lineL instanceof PDFArray) {
+            entry.endpoints = [];
+            for (let i = 0; i < lineL.size(); i++) {
+              const val = lineL.get(i);
+              entry.endpoints.push(typeof val.asNumber === 'function' ? val.asNumber() : parseFloat(val.toString()));
+            }
+          }
+        }
+
+        if (subtypeStr === 'FreeText') {
+          entry.contents = readPdfString(annotDict.get(PDFName.of('Contents')));
+        }
+
+        pageAnnots[pageIdx].all.push(entry);
+        if (subtypeStr === 'Square') pageAnnots[pageIdx].squares.push(entry);
+        else if (subtypeStr === 'FreeText') pageAnnots[pageIdx].freeTexts.push(entry);
+        else if (subtypeStr === 'Line') pageAnnots[pageIdx].lines.push(entry);
+      } catch (e) {
+        console.warn('Colorize: annot ' + j + ' page ' + (pageIdx+1) + ':', e);
+      }
+    }
+  }
+
+  const outputAnnots = [];
+
+  for (const pageIdx in pageAnnots) {
+    const pg = pageAnnots[pageIdx];
+    const squares = pg.squares;
+    const freeTexts = pg.freeTexts;
+    const lines = pg.lines;
+
+    if (squares.length === 0) {
+      for (const a of pg.all) outputAnnots.push(buildAnnotOutput(a, null));
+      continue;
+    }
+
+    status.textContent += `  Page ${parseInt(pageIdx)+1}: ${squares.length} box(es), ${freeTexts.length} text box(es), ${lines.length} line(s)\n`;
+
+    const usedFreeTexts = new Set();
+    const usedLines = new Set();
+
+    for (let si = 0; si < squares.length; si++) {
+      const sq = squares[si];
+      const color = PRISMATIC_PALETTE[si % PRISMATIC_PALETTE.length];
+
+      const sqLeft = Math.min(sq.rect[0], sq.rect[2]);
+      const sqRight = Math.max(sq.rect[0], sq.rect[2]);
+      const sqBot = Math.min(sq.rect[1], sq.rect[3]);
+      const sqTop = Math.max(sq.rect[1], sq.rect[3]);
+      const sqCX = (sqLeft + sqRight) / 2;
+      const sqCY = (sqBot + sqTop) / 2;
+
+      /* Find a Line connecting to this Square */
+      let matchedLine = null;
+      let matchedLineIdx = -1;
+      let bestLineDist = Infinity;
+
+      for (let li = 0; li < lines.length; li++) {
+        if (usedLines.has(li)) continue;
+        const ln = lines[li];
+        if (!ln.endpoints || ln.endpoints.length < 4) continue;
+
+        const [lx1, ly1, lx2, ly2] = ln.endpoints;
+        const ep1Near = pointNearRect(lx1, ly1, sqLeft, sqBot, sqRight, sqTop, 15);
+        const ep2Near = pointNearRect(lx2, ly2, sqLeft, sqBot, sqRight, sqTop, 15);
+
+        if (ep1Near || ep2Near) {
+          const dist = ep1Near ?
+            Math.hypot(lx1 - sqCX, ly1 - sqCY) :
+            Math.hypot(lx2 - sqCX, ly2 - sqCY);
+          if (dist < bestLineDist) {
+            bestLineDist = dist;
+            matchedLine = ln;
+            matchedLineIdx = li;
+          }
+        }
+      }
+
+      /* Find FreeText via Line's far endpoint */
+      let matchedFreeText = null;
+      let matchedFtIdx = -1;
+
+      if (matchedLine && matchedLine.endpoints) {
+        const [lx1, ly1, lx2, ly2] = matchedLine.endpoints;
+        const ep1Near = pointNearRect(lx1, ly1, sqLeft, sqBot, sqRight, sqTop, 15);
+        const farX = ep1Near ? lx2 : lx1;
+        const farY = ep1Near ? ly2 : ly1;
+
+        let bestFtDist = Infinity;
+        for (let fi = 0; fi < freeTexts.length; fi++) {
+          if (usedFreeTexts.has(fi)) continue;
+          const ft = freeTexts[fi];
+          const ftLeft = Math.min(ft.rect[0], ft.rect[2]);
+          const ftRight = Math.max(ft.rect[0], ft.rect[2]);
+          const ftBot = Math.min(ft.rect[1], ft.rect[3]);
+          const ftTop = Math.max(ft.rect[1], ft.rect[3]);
+
+          if (pointNearRect(farX, farY, ftLeft, ftBot, ftRight, ftTop, 20)) {
+            const ftCX = (ftLeft + ftRight) / 2;
+            const ftCY = (ftBot + ftTop) / 2;
+            const dist = Math.hypot(farX - ftCX, farY - ftCY);
+            if (dist < bestFtDist) {
+              bestFtDist = dist;
+              matchedFreeText = ft;
+              matchedFtIdx = fi;
+            }
+          }
+        }
+      }
+
+      /* Fallback: nearest FreeText to left or right */
+      if (!matchedFreeText) {
+        let bestDist = Infinity;
+        for (let fi = 0; fi < freeTexts.length; fi++) {
+          if (usedFreeTexts.has(fi)) continue;
+          const ft = freeTexts[fi];
+          const ftLeft = Math.min(ft.rect[0], ft.rect[2]);
+          const ftRight = Math.max(ft.rect[0], ft.rect[2]);
+          const ftBot = Math.min(ft.rect[1], ft.rect[3]);
+          const ftTop = Math.max(ft.rect[1], ft.rect[3]);
+          const ftCX = (ftLeft + ftRight) / 2;
+          const ftCY = (ftBot + ftTop) / 2;
+
+          const yOverlap = !(ftTop < sqBot - 30 || ftBot > sqTop + 30);
+          const dist = Math.hypot(ftCX - sqCX, ftCY - sqCY);
+          const effectiveDist = yOverlap ? dist : dist * 2;
+
+          if (effectiveDist < bestDist) {
+            bestDist = effectiveDist;
+            matchedFreeText = ft;
+            matchedFtIdx = fi;
+          }
+        }
+      }
+
+      if (matchedFtIdx >= 0) usedFreeTexts.add(matchedFtIdx);
+      if (matchedLineIdx >= 0) usedLines.add(matchedLineIdx);
+
+      outputAnnots.push(buildAnnotOutput(sq, color));
+      if (matchedFreeText) outputAnnots.push(buildAnnotOutput(matchedFreeText, color));
+      if (matchedLine) outputAnnots.push(buildAnnotOutput(matchedLine, color));
+    }
+
+    for (let fi = 0; fi < freeTexts.length; fi++) {
+      if (!usedFreeTexts.has(fi)) outputAnnots.push(buildAnnotOutput(freeTexts[fi], null));
+    }
+    for (let li = 0; li < lines.length; li++) {
+      if (!usedLines.has(li)) outputAnnots.push(buildAnnotOutput(lines[li], null));
+    }
+    for (const a of pg.all) {
+      if (a.subtype !== 'Square' && a.subtype !== 'FreeText' && a.subtype !== 'Line') {
+        outputAnnots.push(buildAnnotOutput(a, null));
+      }
+    }
+  }
+
+  status.textContent += `Colorized ${outputAnnots.length} annotation(s). Generating FDF...\n`;
+  return generateColorizedFDF(outputAnnots);
+}
+
+function pointNearRect(px, py, left, bot, right, top, tol) {
+  if (px < left - tol || px > right + tol || py < bot - tol || py > top + tol) return false;
+  const nearLeft = Math.abs(px - left) <= tol;
+  const nearRight = Math.abs(px - right) <= tol;
+  const nearBot = Math.abs(py - bot) <= tol;
+  const nearTop = Math.abs(py - top) <= tol;
+  const inYRange = py >= bot - tol && py <= top + tol;
+  const inXRange = px >= left - tol && px <= right + tol;
+  return (nearLeft && inYRange) || (nearRight && inYRange) ||
+         (nearBot && inXRange) || (nearTop && inXRange);
+}
+
+function buildAnnotOutput(entry, color) {
+  const out = {
+    subtype: entry.subtype,
+    rect: entry.rect,
+    page: entry.page
+  };
+
+  if (entry.contents) out.contents = entry.contents;
+  else {
+    const c = entry.dict.get(PDFName.of('Contents'));
+    if (c) out.contents = readPdfString(c);
+  }
+
+  const t = entry.dict.get(PDFName.of('T'));
+  if (t) out.title = readPdfString(t);
+
+  const subj = entry.dict.get(PDFName.of('Subj'));
+  if (subj) out.subject = readPdfString(subj);
+
+  const da = entry.dict.get(PDFName.of('DA'));
+  if (da) out.da = readPdfString(da);
+
+  const ds = entry.dict.get(PDFName.of('DS'));
+  if (ds) out.ds = readPdfString(ds);
+
+  const bs = entry.dict.get(PDFName.of('BS'));
+  if (bs && bs instanceof PDFDict) {
+    const w = bs.get(PDFName.of('W'));
+    if (w) out.borderWidth = typeof w.asNumber === 'function' ? w.asNumber() : parseFloat(w.toString());
+  }
+
+  if (entry.endpoints) out.endpoints = entry.endpoints;
+
+  out.colorC = readColorArray(entry.dict.get(PDFName.of('C')));
+  out.colorBC = readColorArray(entry.dict.get(PDFName.of('BC')));
+
+  if (color) {
+    if (entry.subtype === 'Square') {
+      out.colorC = color;
+    } else if (entry.subtype === 'FreeText') {
+      out.colorBC = color;
+      if (!out.colorC || (out.colorC[0] > 0.9 && out.colorC[1] > 0.9 && out.colorC[2] > 0.9)) {
+        out.colorC = [1.0, 1.0, 0.988235];
+      }
+    } else if (entry.subtype === 'Line') {
+      out.colorC = color;
+    }
+  }
+
+  return out;
+}
+
+function escFDF(s) {
+  if (!s) return '';
+  return s
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)")
+    .replace(/\r\n/g, "\\r")
+    .replace(/\n/g, "\\r")
+    .replace(/\r/g, "\\r")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u2014\u2013]/g, "-")
+    .replace(/\u2026/g, "...")
+    .replace(/[^\x00-\x7F]/g, "");
+}
+
+function colorStr(c) {
+  if (!c || c.length < 3) return '';
+  return c.map(v => Math.round(v * 1000000) / 1000000).join(' ');
+}
+
+function generateColorizedFDF(annotations) {
+  const blocks = [];
+
+  for (const a of annotations) {
+    let block = `<<
+/Type /Annot
+/Subtype /${a.subtype}
+/Rect [${a.rect.join(' ')}]
+/Page ${a.page}`;
+
+    if (a.contents) block += `\n/Contents (${escFDF(a.contents)})`;
+    if (a.title) block += `\n/T (${escFDF(a.title)})`;
+    if (a.colorC && a.colorC.length >= 3) block += `\n/C [${colorStr(a.colorC)}]`;
+    if (a.colorBC && a.colorBC.length >= 3) block += `\n/BC [${colorStr(a.colorBC)}]`;
+    if (a.borderWidth !== undefined) block += `\n/BS << /W ${a.borderWidth} >>`;
+    if (a.da) block += `\n/DA (${escFDF(a.da)})`;
+    if (a.ds) block += `\n/DS (${escFDF(a.ds)})`;
+    if (a.subject) block += `\n/Subj (${escFDF(a.subject)})`;
+    if (a.endpoints && a.endpoints.length >= 4) block += `\n/L [${a.endpoints.join(' ')}]`;
+
+    block += '\n>>';
+    blocks.push(block);
+  }
+
+  return `%FDF-1.2
+1 0 obj
+<< /FDF << /Annots [
+${blocks.join('\n')}
+] >> >>
+endobj
+trailer
+<< /Root 1 0 R >>
+%%EOF`;
 }
 </script>
 
