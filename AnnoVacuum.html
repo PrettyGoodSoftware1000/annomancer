@@ -95,7 +95,18 @@
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc = "pdf.worker.js";
 
-const { PDFDocument, PDFName, PDFArray, PDFDict, PDFString, PDFHexString } = PDFLib;
+/* pdf-lib globals - resolved lazily so event handlers still attach
+   even if pdf-lib.min.js loads after this script block runs */
+let PDFDocument, PDFName, PDFArray, PDFDict, PDFString, PDFHexString;
+
+function ensurePdfLib() {
+  if (!PDFDocument && typeof PDFLib !== 'undefined') {
+    ({ PDFDocument, PDFName, PDFArray, PDFDict, PDFString, PDFHexString } = PDFLib);
+  }
+  if (!PDFDocument) {
+    throw new Error('pdf-lib.min.js is not loaded. Make sure the file exists on the server.');
+  }
+}
 
 const pdfInput = document.getElementById("pdfFile");
 const extractBtn = document.getElementById("extractBtn");
@@ -165,6 +176,8 @@ extractBtn.onclick = async function() {
    Matching: Square /C color === FreeText /BC color, same page.
    ============================================================ */
 async function extractAnnotations(pdfData) {
+  ensurePdfLib();
+
   /* ── Phase 1: Read raw annotation dicts with pdf-lib ── */
   status.textContent += "Reading annotation objects (pdf-lib)...\n";
   const pdfLib = await PDFDocument.load(pdfData, { ignoreEncryption: true });
