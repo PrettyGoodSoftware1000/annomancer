@@ -36,7 +36,7 @@
 </head>
 <body>
 
-<div class="version-tag">Herbert (questionable) v8</div>
+<div class="version-tag">Herbert v1</div>
 <a href="index.html" class="back-link">← Back to Annomancer</a>
 <h1>🌀 Anno-Vacuum</h1>
 <p>Upload a PDF and colorize or extract annotations.</p>
@@ -370,7 +370,8 @@ document.getElementById('nextPageBtn').onclick=async function(){if(previewPageId
 function readRectArray(o){if(!o||!(o instanceof PDFArray))return null;const a=[];for(let i=0;i<o.size();i++){const v=o.get(i);a.push(typeof v.asNumber==='function'?v.asNumber():parseFloat(v.toString()));}return a.length>=4?a:null;}
 function readColorArray(o){if(!o||!(o instanceof PDFArray))return null;const a=[];for(let i=0;i<o.size();i++){const v=o.get(i);a.push(typeof v.asNumber==='function'?v.asNumber():parseFloat(v.toString()));}return a.length>=3?a:null;}
 
-/* Read PDF string and normalize ALL forms of line break to \n */
+/* Read PDF string — pdf-lib .asString() returns DECODED text (actual bytes,
+   not escape sequences), so we only need to normalize CR/LF to \n */
 function readPdfString(o){
   if(!o)return'';
   let s;
@@ -378,11 +379,7 @@ function readPdfString(o){
   else if(o instanceof PDFHexString)s=o.decodeText();
   else if(o instanceof PDFString)s=o.asString();
   else s=o.toString();
-  /* Handle actual CR/LF bytes */
-  s=s.replace(/\r\n/g,'\n').replace(/\r/g,'\n');
-  /* Handle literal escape sequences that pdf-lib may have passed through */
-  s=s.replace(/\\r\\n/g,'\n').replace(/\\r/g,'\n').replace(/\\n/g,'\n');
-  return s;
+  return s.replace(/\r\n/g,'\n').replace(/\r/g,'\n');
 }
 
 function colorKey(c){if(!c||c.length<3)return'';return c.map(v=>Math.round(v*10000)/10000).join(',');}
