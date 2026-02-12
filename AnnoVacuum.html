@@ -36,10 +36,10 @@
 </head>
 <body>
 
-<div class="version-tag">Herbert v7</div>
+<div class="version-tag">Herbert v1</div>
 <a href="index.html" class="back-link">← Back to Annomancer</a>
 <h1>🌀 Anno-Vacuum</h1>
-<p>Upload a PDF and extract annotations into a spreadsheet, or colorize them.</p>
+<p>Upload a PDF and colorize or extract annotations.</p>
 
 <div class="custom-file-input">
   <label for="pdfFile">Upload a PDF</label>
@@ -47,8 +47,8 @@
   <span id="pdfFileName" class="file-name"></span>
 </div><br>
 
-<button id="extractBtn">Extract Annos</button>
 <button id="colorizeBtn" style="background:#911EB4;">Colorize</button>
+<button id="extractBtn">Extract Annos from a Colorized PDF</button>
 
 <div id="status"></div>
 
@@ -74,12 +74,35 @@
 </div>
 
 <script>
-pdfjsLib.GlobalWorkerOptions.workerSrc = "pdf.worker.js";
+pdfjsLib.GlobalWorkerOptions.workerSrc="pdf.worker.js";
 let PDFDocument,PDFName,PDFArray,PDFDict,PDFString,PDFHexString;
 function ensurePdfLib(){if(!PDFDocument&&typeof PDFLib!=='undefined')({PDFDocument,PDFName,PDFArray,PDFDict,PDFString,PDFHexString}=PDFLib);if(!PDFDocument)throw new Error('pdf-lib.min.js not loaded.');}
 
 const pdfInput=document.getElementById("pdfFile"),extractBtn=document.getElementById("extractBtn"),status=document.getElementById("status"),downloadSection=document.getElementById("downloadSection"),downloadLink=document.getElementById("downloadLink");
 let colorizedAnnots=[],previewPdfData=null,previewScale=1.5,previewPageIdx=0,previewNumPages=0,selectedAnnots=[];
+
+/* Color name lookup for the prismatic palette */
+const PP=[
+  [.9019,.098,.2941],[.2353,.7059,.2941],[.2627,.3882,.8471],[.9608,.5098,.1922],
+  [.5686,.1176,.7059],[.2588,.8314,.9569],[.9412,.1961,.902],[.2745,.6,.5647],
+  [.6039,.3882,.1412],[.502,0,0],[0,0,.4588],[.502,.502,0],
+  [.1294,.5882,.9529],[1,.3412,.1333],[0,.5882,.5333],[.4745,.3333,.2824],
+  [.3765,.4902,.5451],[.5451,.7647,.2902],[1,.5961,0],[.1843,.3098,.3098]
+];
+const PP_NAMES=[
+  "Crimson","Green","Blue","Orange","Purple","Cyan","Magenta","Teal",
+  "Brown","Maroon","Navy","Olive","Sky Blue","Red-Orange","Sea Green",
+  "Taupe","Steel","Lime","Amber","Dark Teal"
+];
+
+/* Map a color array to its palette name, or return hex */
+function getColorName(c){
+  if(!c||c.length<3)return"";
+  for(let i=0;i<PP.length;i++){
+    if(Math.abs(c[0]-PP[i][0])<0.02&&Math.abs(c[1]-PP[i][1])<0.02&&Math.abs(c[2]-PP[i][2])<0.02)return PP_NAMES[i];
+  }
+  return rgbToHex(c);
+}
 
 pdfInput.onchange=function(){
   const n=this.files[0]?this.files[0].name:"";
@@ -95,7 +118,7 @@ pdfInput.onchange=function(){
   }
 };
 
-/* ===== EXTRACT ANNOS (spreadsheet) ===== */
+/* ===== EXTRACT (spreadsheet) ===== */
 extractBtn.onclick=async function(){
   const file=pdfInput.files[0]; if(!file)return;
   extractBtn.disabled=true; extractBtn.textContent="Extracting...";
@@ -111,35 +134,30 @@ extractBtn.onclick=async function(){
       downloadSection.style.display="block"; status.textContent+="Done!";
     }
   }catch(err){status.textContent+="\nError: "+err.message;console.error(err);}
-  extractBtn.disabled=false; extractBtn.textContent="Extract Annos";
+  extractBtn.disabled=false; extractBtn.textContent="Extract Annos from a Colorized PDF";
 };
 
 async function extractAnnotations(pdfData){
   ensurePdfLib();
-  status.textContent+="Reading annotations...\n";
   const lib=await PDFDocument.load(pdfData,{ignoreEncryption:true}),pgs=lib.getPages();
   const squares=[],freeTexts=[];
   for(let pi=0;pi<pgs.length;pi++){
-    const ar=pgs[pi].node.get(PDFName.of('Annots')); if(!ar)continue;
-    const ans=pgs[pi].node.lookup(PDFName.of('Annots')); if(!ans||!(ans instanceof PDFArray))continue;
+    const ar=pgs[pi].node.get(PDFName.of('Annots'));if(!ar)continue;
+    const ans=pgs[pi].node.lookup(PDFName.of('Annots'));if(!ans||!(ans instanceof PDFArray))continue;
     for(let j=0;j<ans.size();j++){try{
-      const ad=lib.context.lookup(ans.get(j)); if(!(ad instanceof PDFDict))continue;
-      const st=ad.get(PDFName.of('Subtype')); if(!st)continue;
-      const sn=st.asString().replace('/',''),rect=readRectArray(ad.get(PDFName.of('Rect'))); if(!rect)continue;
+      const ad=lib.context.lookup(ans.get(j));if(!(ad instanceof PDFDict))continue;
+      const st=ad.get(PDFName.of('Subtype'));if(!st)continue;
+      const sn=st.asString().replace('/',''),rect=readRectArray(ad.get(PDFName.of('Rect')));if(!rect)continue;
       if(sn==='Square')squares.push({page:pi,rect,colorKey:colorKey(readColorArray(ad.get(PDFName.of('C')))),color:readColorArray(ad.get(PDFName.of('C')))});
       else if(sn==='FreeText')freeTexts.push({page:pi,rect,colorKey:colorKey(readColorArray(ad.get(PDFName.of('BC')))),contents:readPdfString(ad.get(PDFName.of('Contents'))),_used:false});
     }catch(e){}}
   }
   if(!squares.length)return[];
-
-  status.textContent+="Reading text layer...\n";
   const pdfJs=await pdfjsLib.getDocument({data:pdfData}).promise,ptd={};
   for(const pi of new Set(squares.map(s=>s.page))){
     const pg=await pdfJs.getPage(pi+1),tc=await pg.getTextContent();
     ptd[pi]=tc.items.filter(i=>i.str).map(i=>{const T=i.transform,h=Math.hypot(T[2],T[3])||Math.abs(T[3])||10;return{str:i.str,x:T[4],y:T[5],w:i.width||0,h,yTop:T[5]+h,yBot:T[5]-h*0.22};});
   }
-
-  status.textContent+="Matching...\n";
   const results=[];
   for(const sq of squares){
     const[rx1,ry1,rx2,ry2]=sq.rect;
@@ -167,8 +185,6 @@ function buildSpreadsheet(results){
 }
 
 /* ===== COLORIZE ===== */
-const PP=[[.9019,.098,.2941],[.2353,.7059,.2941],[.2627,.3882,.8471],[.9608,.5098,.1922],[.5686,.1176,.7059],[.2588,.8314,.9569],[.9412,.1961,.902],[.2745,.6,.5647],[.6039,.3882,.1412],[.502,0,0],[0,0,.4588],[.502,.502,0],[.1294,.5882,.9529],[1,.3412,.1333],[0,.5882,.5333],[.4745,.3333,.2824],[.3765,.4902,.5451],[.5451,.7647,.2902],[1,.5961,0],[.1843,.3098,.3098]];
-
 document.getElementById("colorizeBtn").onclick=async function(){
   const file=pdfInput.files[0]; if(!file)return;
   this.disabled=true; this.textContent="Colorizing...";
@@ -202,18 +218,18 @@ async function colorizeAnnotations(pdfData){
   status.textContent+="Reading annotations...\n";
   const lib=await PDFDocument.load(pdfData,{ignoreEncryption:true}),pgs=lib.getPages(),pa={};
   for(let pi=0;pi<pgs.length;pi++){
-    const ar=pgs[pi].node.get(PDFName.of('Annots')); if(!ar)continue;
-    const ans=pgs[pi].node.lookup(PDFName.of('Annots')); if(!ans||!(ans instanceof PDFArray))continue;
+    const ar=pgs[pi].node.get(PDFName.of('Annots'));if(!ar)continue;
+    const ans=pgs[pi].node.lookup(PDFName.of('Annots'));if(!ans||!(ans instanceof PDFArray))continue;
     pa[pi]={squares:[],freeTexts:[],lines:[],all:[]};
     for(let j=0;j<ans.size();j++){try{
-      const ad=lib.context.lookup(ans.get(j)); if(!(ad instanceof PDFDict))continue;
-      const st=ad.get(PDFName.of('Subtype')); if(!st)continue;
-      const sn=st.asString().replace('/',''),rect=readRectArray(ad.get(PDFName.of('Rect'))); if(!rect)continue;
+      const ad=lib.context.lookup(ans.get(j));if(!(ad instanceof PDFDict))continue;
+      const st=ad.get(PDFName.of('Subtype'));if(!st)continue;
+      const sn=st.asString().replace('/',''),rect=readRectArray(ad.get(PDFName.of('Rect')));if(!rect)continue;
       const e={subtype:sn,rect,dict:ad,page:pi};
       if(sn==='Line'){const ll=ad.get(PDFName.of('L'));if(ll&&ll instanceof PDFArray){e.endpoints=[];for(let i=0;i<ll.size();i++){const v=ll.get(i);e.endpoints.push(typeof v.asNumber==='function'?v.asNumber():parseFloat(v.toString()));}}}
       if(sn==='FreeText')e.contents=readPdfString(ad.get(PDFName.of('Contents')));
       pa[pi].all.push(e);
-      if(sn==='Square')pa[pi].squares.push(e); else if(sn==='FreeText')pa[pi].freeTexts.push(e); else if(sn==='Line')pa[pi].lines.push(e);
+      if(sn==='Square')pa[pi].squares.push(e);else if(sn==='FreeText')pa[pi].freeTexts.push(e);else if(sn==='Line')pa[pi].lines.push(e);
     }catch(ex){}}
   }
   const out=[];
@@ -230,7 +246,7 @@ async function colorizeAnnotations(pdfData){
       let mFT=null,mFI=-1;
       if(mLn&&mLn.endpoints){const[x1,y1,x2,y2]=mLn.endpoints;const e1=pnr(x1,y1,sL,sB,sR,sT,15);const fX=e1?x2:x1,fY=e1?y2:y1;let bD=1e9;for(let fi=0;fi<pg.freeTexts.length;fi++){if(uFT.has(fi))continue;const ft=pg.freeTexts[fi];const fL=Math.min(ft.rect[0],ft.rect[2]),fR=Math.max(ft.rect[0],ft.rect[2]),fB=Math.min(ft.rect[1],ft.rect[3]),fT=Math.max(ft.rect[1],ft.rect[3]);if(pnr(fX,fY,fL,fB,fR,fT,20)){const d=Math.hypot(fX-(fL+fR)/2,fY-(fB+fT)/2);if(d<bD){bD=d;mFT=ft;mFI=fi;}}}}
       if(!mFT){let bD=1e9;for(let fi=0;fi<pg.freeTexts.length;fi++){if(uFT.has(fi))continue;const ft=pg.freeTexts[fi];const fL=Math.min(ft.rect[0],ft.rect[2]),fR=Math.max(ft.rect[0],ft.rect[2]),fB=Math.min(ft.rect[1],ft.rect[3]),fT=Math.max(ft.rect[1],ft.rect[3]);const yO=!(fT<sB-30||fB>sT+30);const d=Math.hypot((fL+fR)/2-sCX,(fB+fT)/2-sCY);const eff=yO?d:d*2;if(eff<bD){bD=eff;mFT=ft;mFI=fi;}}}
-      if(mFI>=0)uFT.add(mFI); if(mLi>=0)uLN.add(mLi);
+      if(mFI>=0)uFT.add(mFI);if(mLi>=0)uLN.add(mLi);
       out.push(buildAnnotOutput(sq,color));
       if(mFT)out.push(buildAnnotOutput(mFT,color));
       if(mLn)out.push(buildAnnotOutput(mLn,color));
@@ -243,7 +259,7 @@ async function colorizeAnnotations(pdfData){
   return out;
 }
 
-/* ===== PREVIEW ===== */
+/* ===== PREVIEW — render PDF without its native annotations, then draw ours ===== */
 async function renderPreviewPage(){
   document.getElementById('previewSection').style.display='block';
   document.getElementById('pageLabel').textContent=`(Page ${previewPageIdx+1} of ${previewNumPages})`;
@@ -252,7 +268,8 @@ async function renderPreviewPage(){
   const c=document.getElementById('previewCanvas'),ctx=c.getContext('2d');
   c.width=vp.width; c.height=vp.height;
   const o=document.getElementById('overlayCanvas'); o.width=vp.width; o.height=vp.height;
-  await pg.render({canvasContext:ctx,viewport:vp}).promise;
+  /* Render PDF page WITHOUT annotations so old colors don't show */
+  await pg.render({canvasContext:ctx,viewport:vp,annotationMode:0}).promise;
   drawOverlays();
 }
 
@@ -266,17 +283,28 @@ function drawOverlays(){
     const cx=rL*S,cy=(pH-rT)*S,cw=(rR-rL)*S,ch=(rT-rB)*S;
     const col=a.subtype==='FreeText'?(a.colorBC||a.colorC):a.colorC;
     const hex=col?rgbToHex(col):'#cc0000';
+    const cname=getColorName(col);
     const sel=selectedAnnots.includes(ai);
+
     if(a.subtype==='Line'&&a.endpoints&&a.endpoints.length>=4){
       const[x1,y1,x2,y2]=a.endpoints;
-      ctx.strokeStyle=hex; ctx.lineWidth=sel?4:2; ctx.beginPath(); ctx.moveTo(x1*S,(pH-y1)*S); ctx.lineTo(x2*S,(pH-y2)*S); ctx.stroke();
+      ctx.strokeStyle=hex; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x1*S,(pH-y1)*S); ctx.lineTo(x2*S,(pH-y2)*S); ctx.stroke();
       if(sel){ctx.strokeStyle='#fff';ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(x1*S,(pH-y1)*S);ctx.lineTo(x2*S,(pH-y2)*S);ctx.stroke();ctx.setLineDash([]);}
     }else if(a.subtype==='Square'){
-      ctx.strokeStyle=hex; ctx.lineWidth=sel?4:2; ctx.strokeRect(cx,cy,cw,ch); ctx.fillStyle=hex+'20'; ctx.fillRect(cx,cy,cw,ch);
+      ctx.strokeStyle=hex; ctx.lineWidth=2; ctx.strokeRect(cx,cy,cw,ch);
+      ctx.fillStyle=hex+'15'; ctx.fillRect(cx,cy,cw,ch);
+      /* Color name label in lower-right */
+      if(cname){ctx.font='9px sans-serif';ctx.fillStyle=hex;const tw=ctx.measureText(cname).width;ctx.fillText(cname,cx+cw-tw-3,cy+ch-4);}
       if(sel){ctx.strokeStyle='#fff';ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.strokeRect(cx,cy,cw,ch);ctx.setLineDash([]);}
     }else if(a.subtype==='FreeText'){
-      ctx.strokeStyle=hex; ctx.lineWidth=sel?4:2; ctx.strokeRect(cx,cy,cw,ch); ctx.fillStyle='#ffffffa0'; ctx.fillRect(cx,cy,cw,ch);
-      ctx.fillStyle=hex; ctx.font='10px sans-serif'; ctx.fillText((a.contents||'').substring(0,40),cx+3,cy+13);
+      ctx.fillStyle='#ffffffd0'; ctx.fillRect(cx,cy,cw,ch);
+      ctx.strokeStyle=hex; ctx.lineWidth=2; ctx.strokeRect(cx,cy,cw,ch);
+      /* Text content preview */
+      ctx.fillStyle=hex; ctx.font='10px sans-serif';
+      const lines=(a.contents||'').split('\n');
+      for(let li=0;li<Math.min(lines.length,4);li++){ctx.fillText(lines[li].substring(0,50),cx+3,cy+13+li*12);}
+      /* Color name label in lower-right */
+      if(cname){ctx.font='9px sans-serif';ctx.fillStyle=hex;const tw=ctx.measureText(cname).width;ctx.fillText(cname,cx+cw-tw-3,cy+ch-4);}
       if(sel){ctx.strokeStyle='#fff';ctx.lineWidth=1;ctx.setLineDash([4,4]);ctx.strokeRect(cx,cy,cw,ch);ctx.setLineDash([]);}
     }
   }
@@ -289,13 +317,13 @@ document.getElementById('previewWrap').addEventListener('click',function(e){
   const pX=(e.clientX-br.left)/S,pY=pH-(e.clientY-br.top)/S;
   let bi=-1,ba=1e9;
   for(let ai=0;ai<colorizedAnnots.length;ai++){
-    const a=colorizedAnnots[ai]; if(a.page!==previewPageIdx)continue;
+    const a=colorizedAnnots[ai];if(a.page!==previewPageIdx)continue;
     if(a.subtype==='Line'&&a.endpoints&&a.endpoints.length>=4){if(dts(pX,pY,...a.endpoints)<8&&50<ba){ba=50;bi=ai;}}
     else{const r=a.rect,P=3,rL=Math.min(r[0],r[2]),rR=Math.max(r[0],r[2]),rB=Math.min(r[1],r[3]),rT=Math.max(r[1],r[3]);if(pX>=rL-P&&pX<=rR+P&&pY>=rB-P&&pY<=rT+P){const ar=(rR-rL)*(rT-rB);if(ar<ba){ba=ar;bi=ai;}}}
   }
   if(bi>=0){if(e.ctrlKey||e.metaKey){const ei=selectedAnnots.indexOf(bi);if(ei>=0)selectedAnnots.splice(ei,1);else selectedAnnots.push(bi);}else selectedAnnots=[bi];}
   else selectedAnnots=[];
-  drawOverlays(); updateSelInfo();
+  drawOverlays();updateSelInfo();
 });
 
 function dts(px,py,x1,y1,x2,y2){const dx=x2-x1,dy=y2-y1,l2=dx*dx+dy*dy;if(!l2)return Math.hypot(px-x1,py-y1);let t=((px-x1)*dx+(py-y1)*dy)/l2;t=Math.max(0,Math.min(1,t));return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));}
@@ -307,7 +335,7 @@ function updateSelInfo(){
   let html='<b>Selected:</b> ';
   const ftIdx=selectedAnnots.find(i=>colorizedAnnots[i].subtype==='FreeText');
   for(const ai of selectedAnnots){const a=colorizedAnnots[ai];const col=a.subtype==='FreeText'?(a.colorBC||a.colorC):a.colorC;html+=`<span class="sel-swatch" style="background:${col?rgbToHex(col):'#ccc'}"></span>${a.subtype} `;}
-  if(ftIdx!==undefined&&selectedAnnots.length>1)html+=`<button id="matchColorBtn" style="background:#e65100;font-size:14px;padding:8px 16px;margin-left:10px;" onclick="matchToFT(${ftIdx})">Match colors to FreeText (Space)</button>`;
+  if(ftIdx!==undefined&&selectedAnnots.length>1)html+=`<button style="background:#e65100;font-size:14px;padding:8px 16px;margin-left:10px;color:#fff;border:none;border-radius:6px;cursor:pointer;" onclick="matchToFT(${ftIdx})">Match colors to FreeText (Space)</button>`;
   else if(ftIdx!==undefined)html+='<span style="color:#888;margin-left:10px;">Ctrl+click more annotations to match</span>';
   else html+='<span style="color:#888;margin-left:10px;">Include a FreeText in selection to match colors</span>';
   info.innerHTML=html;
@@ -315,27 +343,23 @@ function updateSelInfo(){
 
 /* ===== MATCH COLORS ===== */
 function matchToFT(ftIdx){
-  const tc=colorizedAnnots[ftIdx].colorBC||colorizedAnnots[ftIdx].colorC; if(!tc)return;
+  const tc=colorizedAnnots[ftIdx].colorBC||colorizedAnnots[ftIdx].colorC;if(!tc)return;
   for(const ai of selectedAnnots){if(ai===ftIdx)continue;applyColor(colorizedAnnots[ai],tc);}
-  drawOverlays(); updateSelInfo(); updateFdfDownload();
+  drawOverlays();updateSelInfo();updateFdfDownload();
 }
-
 function applyColor(a,color){
   const rs=color.map(v=>Math.round(v*1e6)/1e6).join(' '),hex=rgbToHex(color);
   if(a.subtype==='Square')a.colorC=color;
   else if(a.subtype==='FreeText'){
     a.colorBC=color;
-    if(a.da)a.da=a.da.replace(/[\d.]+ [\d.]+ [\d.]+ rg/,rs+' rg'); else a.da=rs+' rg /Arial 10 Tf';
-    if(a.ds)a.ds=a.ds.replace(/color:\s*#[0-9a-fA-F]{6}/,'color:'+hex); else a.ds='font: Arial,sans-serif 10.0pt; text-align:left; color:'+hex;
+    if(a.da)a.da=a.da.replace(/[\d.]+ [\d.]+ [\d.]+ rg/,rs+' rg');else a.da=rs+' rg /Arial 10 Tf';
+    if(a.ds)a.ds=a.ds.replace(/color:\s*#[0-9a-fA-F]{6}/,'color:'+hex);else a.ds='font: Arial,sans-serif 10.0pt; text-align:left; color:'+hex;
   }else if(a.subtype==='Line')a.colorC=color;
 }
 
 document.addEventListener('keydown',function(e){
   if(e.code==='Space'&&selectedAnnots.length>0&&document.getElementById('previewSection').style.display!=='none'){
-    e.preventDefault();
-    const fi=selectedAnnots.find(i=>colorizedAnnots[i].subtype==='FreeText');
-    if(fi!==undefined)matchToFT(fi);
-  }
+    e.preventDefault();const fi=selectedAnnots.find(i=>colorizedAnnots[i].subtype==='FreeText');if(fi!==undefined)matchToFT(fi);}
 });
 
 /* ===== PAGE NAV ===== */
@@ -345,7 +369,22 @@ document.getElementById('nextPageBtn').onclick=async function(){if(previewPageId
 /* ===== HELPERS ===== */
 function readRectArray(o){if(!o||!(o instanceof PDFArray))return null;const a=[];for(let i=0;i<o.size();i++){const v=o.get(i);a.push(typeof v.asNumber==='function'?v.asNumber():parseFloat(v.toString()));}return a.length>=4?a:null;}
 function readColorArray(o){if(!o||!(o instanceof PDFArray))return null;const a=[];for(let i=0;i<o.size();i++){const v=o.get(i);a.push(typeof v.asNumber==='function'?v.asNumber():parseFloat(v.toString()));}return a.length>=3?a:null;}
-function readPdfString(o){if(!o)return'';let s;if(typeof o.asString==='function')s=o.asString();else if(o instanceof PDFHexString)s=o.decodeText();else if(o instanceof PDFString)s=o.asString();else s=o.toString();return s.replace(/\r\n/g,'\n').replace(/\r/g,'\n');}
+
+/* Read PDF string and normalize ALL forms of line break to \n */
+function readPdfString(o){
+  if(!o)return'';
+  let s;
+  if(typeof o.asString==='function')s=o.asString();
+  else if(o instanceof PDFHexString)s=o.decodeText();
+  else if(o instanceof PDFString)s=o.asString();
+  else s=o.toString();
+  /* Handle actual CR/LF bytes */
+  s=s.replace(/\r\n/g,'\n').replace(/\r/g,'\n');
+  /* Handle literal escape sequences that pdf-lib may have passed through */
+  s=s.replace(/\\r\\n/g,'\n').replace(/\\r/g,'\n').replace(/\\n/g,'\n');
+  return s;
+}
+
 function colorKey(c){if(!c||c.length<3)return'';return c.map(v=>Math.round(v*10000)/10000).join(',');}
 function rgbToHex(c){if(!c||c.length<3)return'#cccccc';return'#'+c.map(v=>Math.round(v*255).toString(16).padStart(2,'0')).join('');}
 function pnr(px,py,l,b,r,t,tol){if(px<l-tol||px>r+tol||py<b-tol||py>t+tol)return false;const iY=py>=b-tol&&py<=t+tol,iX=px>=l-tol&&px<=r+tol;return(Math.abs(px-l)<=tol&&iY)||(Math.abs(px-r)<=tol&&iY)||(Math.abs(py-b)<=tol&&iX)||(Math.abs(py-t)<=tol&&iX);}
@@ -374,33 +413,39 @@ function buildAnnotOutput(entry,color){
   return o;
 }
 
-/* ===== FDF GENERATION ===== */
+/* ===== FDF GENERATION =====
+   Line breaks in /Contents must be the FDF escape sequence \r
+   which is a backslash followed by the letter r (two characters).
+   This is what Adobe Acrobat expects and what Annomancer writes. */
 function escFDF(s){
   if(!s)return'';
-  return s.replace(/\\/g,"\\\\").replace(/\(/g,"\\(").replace(/\)/g,"\\)")
-    .replace(/\r\n/g,"\r").replace(/\n/g,"\r")
-    .replace(/[\u201C\u201D]/g,'"').replace(/[\u2018\u2019]/g,"'")
-    .replace(/[\u2014\u2013]/g,"-").replace(/\u2026/g,"...")
-    .replace(/[^\x00-\x7F]/g,"");
+  s=s.replace(/\\/g,"\\\\");
+  s=s.replace(/\(/g,"\\(").replace(/\)/g,"\\)");
+  /* Convert actual newlines to the FDF escape sequence \r */
+  s=s.replace(/\r\n/g,"\\r").replace(/\n/g,"\\r").replace(/\r/g,"\\r");
+  s=s.replace(/[\u201C\u201D]/g,'"').replace(/[\u2018\u2019]/g,"'");
+  s=s.replace(/[\u2014\u2013]/g,"-").replace(/\u2026/g,"...");
+  s=s.replace(/[^\x00-\x7F]/g,"");
+  return s;
 }
 function colorStr(c){if(!c||c.length<3)return'';return c.map(v=>Math.round(v*1e6)/1e6).join(' ');}
 
 function generateColorizedFDF(annotations){
   const blocks=[];
   for(const a of annotations){
-    let b=`<<\n/Type /Annot\n/Subtype /${a.subtype}\n/Rect [${a.rect.join(' ')}]\n/Page ${a.page}`;
-    if(a.contents)b+=`\n/Contents (${escFDF(a.contents)})`;
-    if(a.title)b+=`\n/T (${escFDF(a.title)})`;
-    if(a.colorC&&a.colorC.length>=3)b+=`\n/C [${colorStr(a.colorC)}]`;
-    if(a.colorBC&&a.colorBC.length>=3)b+=`\n/BC [${colorStr(a.colorBC)}]`;
-    if(a.borderWidth!==undefined)b+=`\n/BS << /W ${a.borderWidth} >>`;
-    if(a.da)b+=`\n/DA (${escFDF(a.da)})`;
-    if(a.ds)b+=`\n/DS (${escFDF(a.ds)})`;
-    if(a.subject)b+=`\n/Subj (${escFDF(a.subject)})`;
-    if(a.endpoints&&a.endpoints.length>=4)b+=`\n/L [${a.endpoints.join(' ')}]`;
+    let b='<<\n/Type /Annot\n/Subtype /'+a.subtype+'\n/Rect ['+a.rect.join(' ')+']\n/Page '+a.page;
+    if(a.contents)b+='\n/Contents ('+escFDF(a.contents)+')';
+    if(a.title)b+='\n/T ('+escFDF(a.title)+')';
+    if(a.colorC&&a.colorC.length>=3)b+='\n/C ['+colorStr(a.colorC)+']';
+    if(a.colorBC&&a.colorBC.length>=3)b+='\n/BC ['+colorStr(a.colorBC)+']';
+    if(a.borderWidth!==undefined)b+='\n/BS << /W '+a.borderWidth+' >>';
+    if(a.da)b+='\n/DA ('+escFDF(a.da)+')';
+    if(a.ds)b+='\n/DS ('+escFDF(a.ds)+')';
+    if(a.subject)b+='\n/Subj ('+escFDF(a.subject)+')';
+    if(a.endpoints&&a.endpoints.length>=4)b+='\n/L ['+a.endpoints.join(' ')+']';
     b+='\n>>'; blocks.push(b);
   }
-  return `%FDF-1.2\n1 0 obj\n<< /FDF << /Annots [\n${blocks.join('\n')}\n] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF`;
+  return '%FDF-1.2\n1 0 obj\n<< /FDF << /Annots [\n'+blocks.join('\n')+'\n] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF';
 }
 </script>
 </body>
