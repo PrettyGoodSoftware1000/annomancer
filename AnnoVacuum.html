@@ -36,7 +36,7 @@
 </head>
 <body>
 
-<div class="version-tag">Herbert Tripple Lindy v11</div>
+<div class="version-tag">Herbert Nuker v10</div>
 <a href="index.html" class="back-link">← Back to Annomancer</a>
 <h1>🌀 Anno-Vacuum</h1>
 <p>Upload a PDF and colorize or extract annotations.</p>
@@ -180,17 +180,7 @@ async function extractAnnotations(pdfData){
         squares.push({page:pi, rect:rect, colorKey:colorKey(readColorArray(ad.get(PDFName.of('C'))))});
         pagesNeeded.add(pi);
       } else if(sn==='FreeText'){
-        var ftObj = {page:pi, rect:rect, colorKey:colorKey(readColorArray(ad.get(PDFName.of('BC')))), contents:'', rawDecoded:'', _used:false};
-        /* Column D: read decoded text from pdf-lib, convert CR bytes to newline, nothing else */
-        var cObj = ad.get(PDFName.of('Contents'));
-        if(cObj){
-          var decoded = '';
-          if(typeof cObj.asString === 'function') decoded = cObj.asString();
-          else if(cObj instanceof PDFHexString) decoded = cObj.decodeText();
-          else decoded = cObj.toString();
-          ftObj.rawDecoded = decoded.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-        }
-        freeTexts.push(ftObj);
+        freeTexts.push({page:pi, rect:rect, colorKey:colorKey(readColorArray(ad.get(PDFName.of('BC')))), contents:'', _used:false});
         pagesNeeded.add(pi);
       }
     }catch(e){}}
@@ -258,23 +248,24 @@ async function extractAnnotations(pdfData){
       }
     }
     if(mi>=0)freeTexts[mi]._used=true;
-    var rawDec = (mi>=0) ? freeTexts[mi].rawDecoded : '';
-    results.push({page:sq.page+1, text:txt, comment:mc, rawDecoded:rawDec});
+    results.push({page:sq.page+1, text:txt, comment:mc});
   }
   return results;
 }
 
 function buildSpreadsheet(results){
   var wb=XLSX.utils.book_new();
-  var wsData=[["Text from PDF","","Annotation Comment","Comment (with line breaks)","Comment (punctuation breaks)"]];
+  /* A=Text, B=spacer, C=punctuation breaks, D-J=empty, K=flat comment */
+  var wsData=[["Text from PDF","","Annotation Comment","","","","","","","","Raw Comment"]];
   for(var i=0;i<results.length;i++){
     var r=results[i];
-    /* Column E: take flat comment text, add line break after ] } : ; [ { */
-    var punctBroken = r.comment.replace(/([{}\[\]:;])/g, '$1\n').replace(/\n+/g, '\n').trim();
-    wsData.push([r.text, "", r.comment, r.rawDecoded, punctBroken]);
+    /* Column C: add line break after colons, right brackets, right curly brackets */
+    var punctBroken = r.comment.replace(/([\]:}])/g, '$1\n').replace(/\n+/g, '\n').trim();
+    /* Column K: flat text as-is from getAnnotations */
+    wsData.push([r.text, "", punctBroken, "","","","","","","", r.comment]);
   }
   var ws=XLSX.utils.aoa_to_sheet(wsData);
-  ws["!cols"]=[{wch:60},{wch:2},{wch:60},{wch:60},{wch:60}];
+  ws["!cols"]=[{wch:60},{wch:2},{wch:60},{wch:5},{wch:5},{wch:5},{wch:5},{wch:5},{wch:5},{wch:5},{wch:60}];
   XLSX.utils.book_append_sheet(wb, ws, "Extracted Annotations");
   return new Blob([XLSX.write(wb,{bookType:"xlsx",type:"array"})],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
 }
