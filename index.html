@@ -1155,26 +1155,26 @@ trailer
   const critText = d20Roll === 20 ? " Crit!" : "";
 
   const viscontiTarot = [
-    { name: "The Fool", img: "cards/The_Fool.jpg" },
-    { name: "The Magician", img: "cards/The_Magician.jpg" },
-    { name: "The High Priestess", img: "cards/The_High_Priestess.jpg" },
-    { name: "The Empress", img: "cards/The_Empress.jpg" },
-    { name: "The Emperor", img: "cards/The_Emperor.jpg" },
-    { name: "The Hierophant", img: "cards/The_Hierophant.jpg" },
-    { name: "The Lovers", img: "cards/The_Lovers.jpg" },
-    { name: "The Chariot", img: "cards/The_Chariot.jpg" },
+    { name: "the Fool", img: "cards/The_Fool.jpg" },
+    { name: "the Magician", img: "cards/The_Magician.jpg" },
+    { name: "the High Priestess", img: "cards/The_High_Priestess.jpg" },
+    { name: "the Empress", img: "cards/The_Empress.jpg" },
+    { name: "the Emperor", img: "cards/The_Emperor.jpg" },
+    { name: "the Hierophant", img: "cards/The_Hierophant.jpg" },
+    { name: "the Lovers", img: "cards/The_Lovers.jpg" },
+    { name: "the Chariot", img: "cards/The_Chariot.jpg" },
     { name: "Strength", img: "cards/Strength.jpg" },
-    { name: "The Hermit", img: "cards/The_Hermit.jpg" },
-    { name: "Wheel of Fortune", img: "cards/Wheel_of_Fortune.jpg" },
+    { name: "the Hermit", img: "cards/The_Hermit.jpg" },
+    { name: "the Wheel of Fortune", img: "cards/Wheel_of_Fortune.jpg" },
     { name: "Justice", img: "cards/Justice.jpg" },
     { name: "The Hanged Man", img: "cards/The_Hanged_Man.jpg" },
     { name: "Death", img: "cards/Death.jpg" },
     { name: "Temperance", img: "cards/Temperance.jpg" },
-    { name: "The Star", img: "cards/The_Star.jpg" },
-    { name: "The Moon", img: "cards/The_Moon.jpg" },
-    { name: "The Sun", img: "cards/The_Sun.jpg" },
+    { name: "the Star", img: "cards/The_Star.jpg" },
+    { name: "the Moon", img: "cards/The_Moon.jpg" },
+    { name: "the Sun", img: "cards/The_Sun.jpg" },
     { name: "Judgement", img: "cards/Judgement.jpg" },
-    { name: "The World", img: "cards/The_World.jpg" }
+    { name: "the World", img: "cards/The_World.jpg" }
   ];
 
   const drawnCard = viscontiTarot[Math.floor(Math.random() * viscontiTarot.length)];
@@ -1184,7 +1184,7 @@ trailer
   out.innerHTML=
     `Your annos have been 'tated. Import this onto your pdf.${skippedText}<br>
 <a href="${url}" download="${finalName}">Download your annos</a><br><br>
-You also rolled a ${d20Roll} on a 20-sided die${critText} and drawn the ${drawnCard.name}:<br>
+You also rolled a ${d20Roll} on a 20-sided die${critText} and drawn ${drawnCard.name}:<br>
 <img src="${drawnCard.img}" alt="${drawnCard.name}" style="max-width:200px; margin-top:10px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,0.2);">`;
 
   autoBtn.style.background="green";
