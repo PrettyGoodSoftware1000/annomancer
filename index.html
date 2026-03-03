@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Annomancer</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+    background: #f5f6fa;
+    color: #222;
+    min-height: 100vh;
+  }
+
+  .masthead {
+    width: 100%;
+    background: #1a1a2e;
+    display: flex;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .masthead img {
+    display: block;
+    max-width: 1536px;
+    width: 100%;
+    height: auto;
+  }
+
+  .content {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 50px 24px 80px;
+    text-align: center;
+  }
+
+  h1 {
+    font-size: 32px;
+    font-weight: 700;
+    color: #1a1a2e;
+    margin-bottom: 40px;
+    letter-spacing: -0.5px;
+  }
+
+  .tools {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .tool-btn {
+    display: block;
+    padding: 22px 28px;
+    border-radius: 10px;
+    font-size: 18px;
+    font-weight: 500;
+    border: none;
+    cursor: pointer;
+    text-decoration: none;
+    color: #fff;
+    background: #0078ff;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    text-align: left;
+  }
+  .tool-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0,0,0,0.2);
+  }
+  .tool-btn:active {
+    transform: translateY(0);
+  }
+
+  .btn-disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .btn-disabled:hover {
+    transform: none;
+    box-shadow: none;
+  }
+
+  .coming-soon {
+    font-size: 12px;
+    opacity: 0.7;
+    margin-left: 8px;
+    font-weight: 400;
+  }
+</style>
+</head>
+<body>
+
+<div class="masthead">
+  <img src="masthead.png" alt="Annomancer" width="1536" height="514" />
+</div>
+
+<div class="content">
+  <h1>What are you trying to do?</h1>
+
+  <div class="tools">
+    <a href="AddSomeAnnos.html" class="tool-btn">
+      Add some annos to a PDF.
+    </a>
+
+    <a href="AnnoVacuum.html" class="tool-btn">
+      Take some annos from a PDF to make a spreadsheet.
+    </a>
+
+    <div class="tool-btn btn-disabled">
+      Format some annos.<span class="coming-soon">coming soon</span>
+    </div>
+
+    <a href="AutoQC.html" class="tool-btn">
+      Auto-QC something letterboxed.
+    </a>
+  </div>
+</div>
+
+</body>
+</html>

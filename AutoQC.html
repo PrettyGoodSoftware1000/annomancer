@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Auto-QC</title>
+<script src="pdf.js"></script>
+<script src="pdf-lib.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+    background: #f5f6fa;
+    color: #222;
+    text-align: center;
+    padding: 30px;
+  }
+  .back-link { display:inline-block; margin-bottom:20px; color:#0078ff; text-decoration:none; }
+  .back-link:hover { text-decoration:underline; }
+  h1 { font-size:28px; font-weight:700; color:#1a1a2e; margin-bottom:8px; }
+  .subtitle { color:#666; margin-bottom:30px; font-size:15px; }
+
+  .upload-row {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
+  }
+  .upload-box {
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    padding: 24px;
+    width: 340px;
+    text-align: center;
+  }
+  .upload-box h3 { font-size:15px; color:#333; margin-bottom:14px; font-weight:600; }
+  .upload-box input[type="file"] { display:none; }
+  .upload-box label {
+    display: inline-block;
+    padding: 12px 20px;
+    background: #0078ff;
+    color: #fff;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 15px;
+    transition: background 0.15s;
+  }
+  .upload-box label:hover { background:#005fd1; }
+  .file-name { display:block; margin-top:10px; font-size:13px; color:#666; font-style:italic; min-height:20px; }
+
+  #qcBtn {
+    padding: 14px 36px;
+    border-radius: 8px;
+    border: none;
+    font-size: 18px;
+    font-weight: 600;
+    cursor: pointer;
+    color: #fff;
+    background: #0078ff;
+    transition: background 0.15s;
+    display: none;
+  }
+  #qcBtn:hover { background:#005fd1; }
+  #qcBtn:disabled { background:#aaa; cursor:default; }
+
+  #status {
+    margin: 20px auto;
+    max-width: 700px;
+    font-size: 14px;
+    text-align: left;
+    background: #fff;
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    white-space: pre-wrap;
+    display: none;
+  }
+
+  #resultsSection {
+    display: none;
+    margin: 30px auto;
+    max-width: 800px;
+  }
+  #resultsSection h2 { font-size:20px; margin-bottom:16px; color:#1a1a2e; }
+
+  .results-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    text-align: left;
+    background: #fff;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  .results-table th {
+    background: #1a1a2e;
+    color: #fff;
+    padding: 12px 16px;
+    font-weight: 600;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .results-table td {
+    padding: 10px 16px;
+    border-bottom: 1px solid #eee;
+  }
+  .results-table tr:last-child td { border-bottom:none; }
+  .row-match { background: #e8f5e9; }
+  .row-mismatch { background: #ffebee; }
+  .missing { color:#c62828; font-weight:600; font-style:italic; }
+  .match-icon { font-size:16px; }
+
+  .summary {
+    margin-top: 20px;
+    padding: 16px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    font-size: 15px;
+  }
+  .summary-pass { color:#2e7d32; font-weight:700; }
+  .summary-fail { color:#c62828; font-weight:700; }
+</style>
+</head>
+<body>
+
+<a href="index.html" class="back-link">← Back</a>
+<h1>Auto-QC</h1>
+<p class="subtitle">Compare annotation callouts against Veeva-tagged text</p>
+
+<div class="upload-row">
+  <div class="upload-box">
+    <h3>Annotated PDF</h3>
+    <label for="annotFile">Add Annotated PDF</label>
+    <input type="file" id="annotFile" accept="application/pdf" />
+    <span id="annotFileName" class="file-name"></span>
+  </div>
+  <div class="upload-box">
+    <h3>Veeva PDF</h3>
+    <label for="veevaFile">Add a PDF from Veeva that's tagged and linked</label>
+    <input type="file" id="veevaFile" accept="application/pdf" />
+    <span id="veevaFileName" class="file-name"></span>
+  </div>
+</div>
+
+<button id="qcBtn">QC it</button>
+<div id="status"></div>
+<div id="resultsSection"></div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = "pdf.worker.js";
+var PDFDocument, PDFName, PDFArray, PDFDict, PDFString, PDFHexString;
+function ensurePdfLib(){
+  if(!PDFDocument && typeof PDFLib !== 'undefined')
+    ({PDFDocument,PDFName,PDFArray,PDFDict,PDFString,PDFHexString} = PDFLib);
+}
+
+var annotInput = document.getElementById('annotFile');
+var veevaInput = document.getElementById('veevaFile');
+var qcBtn = document.getElementById('qcBtn');
+var statusEl = document.getElementById('status');
+
+annotInput.onchange = function(){
+  document.getElementById('annotFileName').textContent = this.files[0] ? this.files[0].name : '';
+  checkReady();
+};
+veevaInput.onchange = function(){
+  document.getElementById('veevaFileName').textContent = this.files[0] ? this.files[0].name : '';
+  checkReady();
+};
+function checkReady(){
+  qcBtn.style.display = (annotInput.files[0] && veevaInput.files[0]) ? 'inline-block' : 'none';
+}
+
+/* ===== PATTERN: pXA where X = one or more digits, A = one letter ===== */
+var TAG_REGEX = /p(\d+)([A-Za-z])/g;
+
+function findTags(text){
+  var counts = {};
+  var m;
+  TAG_REGEX.lastIndex = 0;
+  while((m = TAG_REGEX.exec(text)) !== null){
+    var tag = 'p' + m[1] + m[2].toUpperCase();
+    counts[tag] = (counts[tag] || 0) + 1;
+  }
+  return counts;
+}
+
+/* Sort tags by letter then number: p1A, p2A, p10A, p1B, p2B... */
+function sortTags(tags){
+  return tags.slice().sort(function(a, b){
+    var ma = a.match(/^p(\d+)([A-Z])$/);
+    var mb = b.match(/^p(\d+)([A-Z])$/);
+    if(!ma || !mb) return a.localeCompare(b);
+    if(ma[2] !== mb[2]) return ma[2].localeCompare(mb[2]);
+    return parseInt(ma[1]) - parseInt(mb[1]);
+  });
+}
+
+/* ===== EXTRACT ANNOTATION COMMENTS from Annotated PDF (pdf-lib) ===== */
+async function extractAnnotComments(pdfData){
+  ensurePdfLib();
+  var lib = await PDFDocument.load(pdfData, {ignoreEncryption:true});
+  var pages = lib.getPages();
+  var allText = '';
+
+  for(var pi = 0; pi < pages.length; pi++){
+    var annotsRef = pages[pi].node.get(PDFName.of('Annots'));
+    if(!annotsRef) continue;
+    var annots = pages[pi].node.lookup(PDFName.of('Annots'));
+    if(!annots || !(annots instanceof PDFArray)) continue;
+
+    for(var j = 0; j < annots.size(); j++){
+      try {
+        var ad = lib.context.lookup(annots.get(j));
+        if(!(ad instanceof PDFDict)) continue;
+        var cObj = ad.get(PDFName.of('Contents'));
+        if(!cObj) continue;
+        var txt = '';
+        if(typeof cObj.asString === 'function') txt = cObj.asString();
+        else if(cObj instanceof PDFHexString) txt = cObj.decodeText();
+        else txt = cObj.toString();
+        allText += ' ' + txt;
+      } catch(e){}
+    }
+  }
+  return allText;
+}
+
+/* ===== EXTRACT PAGE TEXT from Veeva PDF (pdf.js) ===== */
+async function extractPageText(pdfData){
+  var pdfJs = await pdfjsLib.getDocument({data: pdfData}).promise;
+  var allText = '';
+  for(var i = 1; i <= pdfJs.numPages; i++){
+    var pg = await pdfJs.getPage(i);
+    var tc = await pg.getTextContent();
+    for(var j = 0; j < tc.items.length; j++){
+      if(tc.items[j].str) allText += ' ' + tc.items[j].str;
+    }
+  }
+  return allText;
+}
+
+/* ===== QC BUTTON ===== */
+qcBtn.onclick = async function(){
+  qcBtn.disabled = true;
+  qcBtn.textContent = 'Working...';
+  statusEl.style.display = 'block';
+  statusEl.textContent = 'Reading annotated PDF comments...\n';
+  document.getElementById('resultsSection').style.display = 'none';
+
+  try {
+    var annotData = new Uint8Array(await annotInput.files[0].arrayBuffer());
+    var veevaData = new Uint8Array(await veevaInput.files[0].arrayBuffer());
+
+    var annotText = await extractAnnotComments(annotData);
+    statusEl.textContent += 'Found ' + annotText.length + ' chars of comment text.\n';
+    statusEl.textContent += 'Reading Veeva PDF text...\n';
+
+    var veevaText = await extractPageText(veevaData);
+    statusEl.textContent += 'Found ' + veevaText.length + ' chars of page text.\n';
+    statusEl.textContent += 'Searching for tags...\n';
+
+    var annotCounts = findTags(annotText);
+    var veevaCounts = findTags(veevaText);
+
+    var annotKeys = Object.keys(annotCounts);
+    var veevaKeys = Object.keys(veevaCounts);
+    statusEl.textContent += 'Annotated PDF: ' + annotKeys.length + ' unique tags found.\n';
+    statusEl.textContent += 'Veeva PDF: ' + veevaKeys.length + ' unique tags found.\n';
+
+    displayResults(annotCounts, veevaCounts);
+    statusEl.textContent += 'Done!';
+  } catch(err){
+    statusEl.textContent += '\nError: ' + err.message;
+    console.error(err);
+  }
+  qcBtn.disabled = false;
+  qcBtn.textContent = 'QC it';
+};
+
+/* ===== DISPLAY RESULTS ===== */
+function displayResults(annotCounts, veevaCounts){
+  /* Collect all unique tags */
+  var allTags = {};
+  var k;
+  for(k in annotCounts) allTags[k] = true;
+  for(k in veevaCounts) allTags[k] = true;
+  var sorted = sortTags(Object.keys(allTags));
+
+  var matchCount = 0, mismatchCount = 0;
+
+  var html = '<h2>QC Results</h2>';
+  html += '<table class="results-table">';
+  html += '<tr><th>Tag</th><th>Annotated PDF</th><th>Veeva PDF</th><th></th></tr>';
+
+  for(var i = 0; i < sorted.length; i++){
+    var tag = sorted[i];
+    var ac = annotCounts[tag] || 0;
+    var vc = veevaCounts[tag] || 0;
+    var match = (ac === vc && ac > 0);
+    var rowClass = match ? 'row-match' : 'row-mismatch';
+
+    if(match) matchCount++; else mismatchCount++;
+
+    var annotCell = ac > 0 ? (ac + (ac === 1 ? ' time' : ' times')) : '<span class="missing">missing</span>';
+    var veevaCell = vc > 0 ? (vc + (vc === 1 ? ' time' : ' times')) : '<span class="missing">missing</span>';
+    var icon = match ? '<span class="match-icon">✓</span>' : '<span class="match-icon">✗</span>';
+
+    html += '<tr class="' + rowClass + '">';
+    html += '<td><strong>' + tag + '</strong></td>';
+    html += '<td>' + annotCell + '</td>';
+    html += '<td>' + veevaCell + '</td>';
+    html += '<td>' + icon + '</td>';
+    html += '</tr>';
+  }
+  html += '</table>';
+
+  /* Summary */
+  html += '<div class="summary">';
+  if(mismatchCount === 0 && sorted.length > 0){
+    html += '<span class="summary-pass">All ' + sorted.length + ' tags match between both PDFs.</span>';
+  } else if(sorted.length === 0){
+    html += 'No pXA tags found in either PDF.';
+  } else {
+    html += '<span class="summary-pass">' + matchCount + ' matching</span> · ';
+    html += '<span class="summary-fail">' + mismatchCount + ' mismatched</span> · ';
+    html += sorted.length + ' total tags';
+  }
+  html += '</div>';
+
+  var resultsEl = document.getElementById('resultsSection');
+  resultsEl.innerHTML = html;
+  resultsEl.style.display = 'block';
+}
+</script>
+</body>
+</html>
