@@ -177,15 +177,49 @@ function checkReady(){
 }
 
 /* ===== PATTERN: pXA where X = one or more digits, A = one letter ===== */
-var TAG_REGEX = /p(\d+)([A-Za-z])/g;
 
+/* Simple tag finder — used for Veeva PDF (just find literal pXA patterns) */
 function findTags(text){
   var counts = {};
+  var regex = /p(\d+)([A-Za-z])/g;
   var m;
-  TAG_REGEX.lastIndex = 0;
-  while((m = TAG_REGEX.exec(text)) !== null){
+  while((m = regex.exec(text)) !== null){
     var tag = 'p' + m[1] + m[2].toUpperCase();
     counts[tag] = (counts[tag] || 0) + 1;
+  }
+  return counts;
+}
+
+/* Expanded tag finder — used for Annotated PDF comments.
+   Handles shorthand like "p12A, B" => p12A + p12B
+   and "p64A,c, D" => p64A + p64C + p64D
+   Logic: when we find pXA, remember X as the current number.
+   Then scan ahead for comma-separated standalone letters that inherit X. */
+function findTagsExpanded(text){
+  var counts = {};
+  /* Match a full tag like p12A, optionally followed by comma+letter sequences */
+  var regex = /p(\d+)([A-Za-z])((?:\s*,\s*[A-Za-z])*)/gi;
+  var m;
+  while((m = regex.exec(text)) !== null){
+    var num = m[1];
+    var firstLetter = m[2].toUpperCase();
+    var trailing = m[3]; /* e.g. ", B, c" or ",C, D" or "" */
+
+    /* Count the first tag */
+    var tag = 'p' + num + firstLetter;
+    counts[tag] = (counts[tag] || 0) + 1;
+
+    /* Parse trailing comma-separated letters */
+    if(trailing){
+      var parts = trailing.split(',');
+      for(var i = 0; i < parts.length; i++){
+        var letter = parts[i].trim();
+        if(letter.length === 1 && /[A-Za-z]/.test(letter)){
+          var extraTag = 'p' + num + letter.toUpperCase();
+          counts[extraTag] = (counts[extraTag] || 0) + 1;
+        }
+      }
+    }
   }
   return counts;
 }
@@ -265,7 +299,7 @@ qcBtn.onclick = async function(){
     statusEl.textContent += 'Found ' + veevaText.length + ' chars of page text.\n';
     statusEl.textContent += 'Searching for tags...\n';
 
-    var annotCounts = findTags(annotText);
+    var annotCounts = findTagsExpanded(annotText);
     var veevaCounts = findTags(veevaText);
 
     var annotKeys = Object.keys(annotCounts);
