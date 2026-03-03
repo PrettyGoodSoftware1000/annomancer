@@ -128,7 +128,7 @@
 </head>
 <body>
 
-<a href="index.html" class="back-link">← Back</a>
+<a href="index.html" class="back-link">&larr; Back</a>
 <h1>Auto-QC</h1>
 <p class="subtitle">Compare annotation callouts against Veeva-tagged text</p>
 
@@ -176,12 +176,15 @@ function checkReady(){
   qcBtn.style.display = (annotInput.files[0] && veevaInput.files[0]) ? 'inline-block' : 'none';
 }
 
-/* ===== PATTERN: pXA where X = one or more digits, A = one letter ===== */
+/* ==========================================================================
+   TAG FINDERS
+   ========================================================================== */
 
-/* Simple tag finder — used for Veeva PDF (just find literal pXA patterns) */
-function findTags(text){
+/* Veeva tag finder: matches "p1A", "Pg 64A", "pg. 1j", "PG64A", "Pg.12B" etc.
+   Case insensitive. All normalized to "pXA" uppercase. */
+function findTagsVeeva(text){
   var counts = {};
-  var regex = /p(\d+)([A-Za-z])/g;
+  var regex = /p(?:g\.?\s*)?(\d+)\s*([a-z])/gi;
   var m;
   while((m = regex.exec(text)) !== null){
     var tag = 'p' + m[1] + m[2].toUpperCase();
@@ -190,35 +193,56 @@ function findTags(text){
   return counts;
 }
 
-/* Expanded tag finder — used for Annotated PDF comments.
-   Handles shorthand like "p12A, B" => p12A + p12B
-   and "p64A,c, D" => p64A + p64C + p64D
-   Logic: when we find pXA, remember X as the current number.
-   Then scan ahead for comma-separated standalone letters that inherit X. */
-function findTagsExpanded(text){
+/* Annotated PDF tag finder: handles shorthand trailing letters.
+   Rules:
+     "p12A, B"    => p12A + p12B
+     "p64A,c, D"  => p64A + p64C + p64D
+     "p3A,p4B"    => p3A + p4B  (two full tags, NOT p3A + p3P)
+     "p3A,p "     => p3A + p3P  (p before space = trailing letter)
+     "p3A,p/"     => p3A + p3P  (p before punctuation = trailing letter)
+     "p3A,p;"     => p3A + p3P
+     "p3A,p:"     => p3A + p3P
+     "p3A,p]"     => p3A + p3P
+   Key rule: after comma, a letter followed by a DIGIT is a new full tag start.
+   A letter NOT followed by a digit is a trailing letter inheriting the number.
+   Case insensitive throughout. */
+function findTagsAnnotated(text){
   var counts = {};
-  /* Match a full tag like p12A, optionally followed by comma+letter sequences */
-  var regex = /p(\d+)([A-Za-z])((?:\s*,\s*[A-Za-z])*)/gi;
+
+  /* Step 1: find all full pXA tags and their positions */
+  var fullRegex = /p(\d+)([a-z])/gi;
+  var tags = [];
   var m;
-  while((m = regex.exec(text)) !== null){
-    var num = m[1];
-    var firstLetter = m[2].toUpperCase();
-    var trailing = m[3]; /* e.g. ", B, c" or ",C, D" or "" */
+  while((m = fullRegex.exec(text)) !== null){
+    tags.push({
+      num: m[1],
+      letter: m[2].toUpperCase(),
+      start: m.index,
+      end: fullRegex.lastIndex
+    });
+  }
 
-    /* Count the first tag */
-    var tag = 'p' + num + firstLetter;
-    counts[tag] = (counts[tag] || 0) + 1;
+  for(var t = 0; t < tags.length; t++){
+    var num = tags[t].num;
 
-    /* Parse trailing comma-separated letters */
-    if(trailing){
-      var parts = trailing.split(',');
-      for(var i = 0; i < parts.length; i++){
-        var letter = parts[i].trim();
-        if(letter.length === 1 && /[A-Za-z]/.test(letter)){
-          var extraTag = 'p' + num + letter.toUpperCase();
-          counts[extraTag] = (counts[extraTag] || 0) + 1;
-        }
-      }
+    /* Count the main tag */
+    var mainTag = 'p' + num + tags[t].letter;
+    counts[mainTag] = (counts[mainTag] || 0) + 1;
+
+    /* Step 2: scan the text between this tag and the next tag for trailing letters.
+       A trailing letter is: comma, optional whitespace, a single letter
+       where that letter is NOT followed by a digit. */
+    var scanStart = tags[t].end;
+    var scanEnd = (t + 1 < tags.length) ? tags[t + 1].start : text.length;
+    var between = text.substring(scanStart, scanEnd);
+
+    /* Match: comma, optional space, one letter, then NOT a digit after it.
+       The negative lookahead (?!\d) ensures we don't grab the "p" in "p4B". */
+    var trailingRegex = /,\s*([a-z])(?!\d)/gi;
+    var tm;
+    while((tm = trailingRegex.exec(between)) !== null){
+      var extraTag = 'p' + num + tm[1].toUpperCase();
+      counts[extraTag] = (counts[extraTag] || 0) + 1;
     }
   }
   return counts;
@@ -299,8 +323,8 @@ qcBtn.onclick = async function(){
     statusEl.textContent += 'Found ' + veevaText.length + ' chars of page text.\n';
     statusEl.textContent += 'Searching for tags...\n';
 
-    var annotCounts = findTagsExpanded(annotText);
-    var veevaCounts = findTags(veevaText);
+    var annotCounts = findTagsAnnotated(annotText);
+    var veevaCounts = findTagsVeeva(veevaText);
 
     var annotKeys = Object.keys(annotCounts);
     var veevaKeys = Object.keys(veevaCounts);
@@ -319,7 +343,6 @@ qcBtn.onclick = async function(){
 
 /* ===== DISPLAY RESULTS ===== */
 function displayResults(annotCounts, veevaCounts){
-  /* Collect all unique tags */
   var allTags = {};
   var k;
   for(k in annotCounts) allTags[k] = true;
@@ -343,7 +366,7 @@ function displayResults(annotCounts, veevaCounts){
 
     var annotCell = ac > 0 ? (ac + (ac === 1 ? ' time' : ' times')) : '<span class="missing">missing</span>';
     var veevaCell = vc > 0 ? (vc + (vc === 1 ? ' time' : ' times')) : '<span class="missing">missing</span>';
-    var icon = match ? '<span class="match-icon">✓</span>' : '<span class="match-icon">✗</span>';
+    var icon = match ? '<span class="match-icon">&check;</span>' : '<span class="match-icon">&cross;</span>';
 
     html += '<tr class="' + rowClass + '">';
     html += '<td><strong>' + tag + '</strong></td>';
@@ -354,15 +377,14 @@ function displayResults(annotCounts, veevaCounts){
   }
   html += '</table>';
 
-  /* Summary */
   html += '<div class="summary">';
   if(mismatchCount === 0 && sorted.length > 0){
     html += '<span class="summary-pass">All ' + sorted.length + ' tags match between both PDFs.</span>';
   } else if(sorted.length === 0){
-    html += 'No pXA tags found in either PDF.';
+    html += 'No tags found in either PDF.';
   } else {
-    html += '<span class="summary-pass">' + matchCount + ' matching</span> · ';
-    html += '<span class="summary-fail">' + mismatchCount + ' mismatched</span> · ';
+    html += '<span class="summary-pass">' + matchCount + ' matching</span> &middot; ';
+    html += '<span class="summary-fail">' + mismatchCount + ' mismatched</span> &middot; ';
     html += sorted.length + ' total tags';
   }
   html += '</div>';
