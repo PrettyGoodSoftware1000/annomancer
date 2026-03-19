@@ -11,48 +11,107 @@
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
     background: #f5f6fa;
     color: #222;
+    min-height: 100vh;
+  }
+
+  .masthead {
+    width: 100%;
+    background: #1a1a2e;
+    display: flex;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .masthead img {
+    display: block;
+    max-width: 1536px;
+    width: 100%;
+    height: auto;
+  }
+
+  .page-content {
     text-align: center;
     padding: 30px;
   }
+
   .back-link { display:inline-block; margin-bottom:20px; color:#0078ff; text-decoration:none; }
   .back-link:hover { text-decoration:underline; }
   h1 { font-size:28px; font-weight:700; color:#1a1a2e; margin-bottom:8px; }
   .subtitle { color:#666; margin-bottom:30px; font-size:15px; }
 
-  .upload-row {
+  .drop-zone-container {
     display: flex;
     justify-content: center;
     gap: 28px;
+    margin: 0 auto 28px;
     flex-wrap: wrap;
-    margin-bottom: 28px;
+    align-items: center;
   }
-  .upload-box {
+
+  .drop-zone {
+    width: 300px;
+    height: 210px;
+    border: 3px dashed #ccc;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
     background: #fff;
-    border-radius: 10px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-    padding: 28px;
-    width: 320px;
-    text-align: center;
+    transition: all 0.2s ease;
+    cursor: pointer;
+    padding: 16px;
   }
-  .upload-box h3 { font-size: 15px; color:#333; margin-bottom:4px; font-weight:600; }
-  .upload-box .hint { font-size:12px; color:#999; margin-bottom:14px; }
-  .upload-box input[type="file"] { display:none; }
-  .upload-box label {
-    display: inline-block;
-    padding: 12px 22px;
+  .drop-zone:hover {
+    border-color: #0078ff;
+    background: #f0f7ff;
+  }
+  .drop-zone.drag-over {
+    border-color: #0078ff;
+    background: #e0f0ff;
+    transform: scale(1.02);
+  }
+  .drop-zone.has-file {
+    border-color: #28a745;
+    background: #e8f5e9;
+  }
+  .drop-zone h3 {
+    margin: 0 0 4px;
+    color: #333;
+    font-size: 16px;
+  }
+  .drop-zone .hint {
+    color: #999;
+    font-size: 12px;
+    margin-bottom: 12px;
+  }
+  .drop-zone .drop-msg {
+    color: #888;
+    font-size: 14px;
+    margin: 4px 0;
+  }
+  .drop-zone .file-name {
+    margin-top: 10px;
+    font-weight: 600;
+    color: #28a745;
+    word-break: break-all;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+  .drop-zone input[type="file"] { display:none; }
+  .drop-zone .fallback-btn {
+    margin-top: 8px;
+    padding: 8px 16px;
     background: #0078ff;
     color: #fff;
+    border: none;
     border-radius: 6px;
     cursor: pointer;
-    font-size: 15px;
+    font-size: 13px;
     transition: background 0.15s;
   }
-  .upload-box label:hover { background:#005fd1; }
-  .file-name { display:block; margin-top:10px; font-size:13px; color:#666; font-style:italic; min-height:20px; }
+  .drop-zone .fallback-btn:hover { background:#005fd1; }
 
   .arrow {
-    display: flex;
-    align-items: center;
     font-size: 32px;
     color: #bbb;
     user-select: none;
@@ -90,32 +149,44 @@
 </head>
 <body>
 
+<div class="masthead">
+  <img src="masthead.png" alt="Annomancer" width="1536" height="514" />
+</div>
+
+<div class="page-content">
+
 <a href="index.html" class="back-link">&larr; Back</a>
 <h1>Transfer Annos</h1>
-<p class="subtitle">Copy annotations from one PDF onto another</p>
+<p class="subtitle">Move annos from an old pdf to a new one.</p>
 
-<div class="upload-row">
-  <div class="upload-box">
-    <h3>Source PDF</h3>
-    <p class="hint">The PDF with annotations</p>
-    <label for="srcPdf">Select a PDF</label>
-    <input type="file" id="srcPdf" accept="application/pdf" />
-    <span id="srcPdfName" class="file-name"></span>
+<div class="drop-zone-container">
+  <div class="drop-zone" id="srcZone">
+    <h3>Old PDF</h3>
+    <p class="hint">Take the annos from this file</p>
+    <p class="drop-msg">Drop PDF here</p>
+    <p class="drop-msg">or</p>
+    <button class="fallback-btn" onclick="document.getElementById('srcInput').click()">Select File</button>
+    <input type="file" id="srcInput" accept="application/pdf" />
+    <div class="file-name" id="srcName"></div>
   </div>
 
   <div class="arrow">&rarr;</div>
 
-  <div class="upload-box">
-    <h3>Destination PDF</h3>
-    <p class="hint">The PDF to receive them</p>
-    <label for="dstPdf">Select a PDF</label>
-    <input type="file" id="dstPdf" accept="application/pdf" />
-    <span id="dstPdfName" class="file-name"></span>
+  <div class="drop-zone" id="dstZone">
+    <h3>New PDF</h3>
+    <p class="hint">Add the annos to this file</p>
+    <p class="drop-msg">Drop PDF here</p>
+    <p class="drop-msg">or</p>
+    <button class="fallback-btn" onclick="document.getElementById('dstInput').click()">Select File</button>
+    <input type="file" id="dstInput" accept="application/pdf" />
+    <div class="file-name" id="dstName"></div>
   </div>
 </div>
 
 <button id="transferBtn">Transfer Annos</button>
 <div id="status"></div>
+
+</div>
 
 <script>
 var PDFDocument, PDFName, PDFArray, PDFDict, PDFString, PDFHexString, PDFNumber, PDFStream, PDFRef;
@@ -136,28 +207,69 @@ function ensurePdfLib(){
 var statusEl = document.getElementById('status');
 function log(msg){ statusEl.style.display = 'block'; statusEl.textContent += msg + '\n'; }
 
-var srcInput = document.getElementById('srcPdf');
-var dstInput = document.getElementById('dstPdf');
+var srcFile = null;
+var dstFile = null;
 var transferBtn = document.getElementById('transferBtn');
 
-srcInput.onchange = function(){
-  document.getElementById('srcPdfName').textContent = this.files[0] ? this.files[0].name : '';
+/* ================================================================
+   DRAG & DROP SETUP
+   ================================================================ */
+function setupDropZone(zoneId, inputId, nameId, onFile){
+  var zone = document.getElementById(zoneId);
+  var input = document.getElementById(inputId);
+  var nameEl = document.getElementById(nameId);
+
+  zone.addEventListener('dragover', function(e){
+    e.preventDefault();
+    zone.classList.add('drag-over');
+  });
+  zone.addEventListener('dragleave', function(){
+    zone.classList.remove('drag-over');
+  });
+  zone.addEventListener('drop', function(e){
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    var files = e.dataTransfer.files;
+    if(files.length > 0 && files[0].type === 'application/pdf'){
+      handleZoneFile(files[0], zone, nameEl, onFile);
+    }
+  });
+  zone.addEventListener('click', function(e){
+    if(e.target.tagName !== 'BUTTON') input.click();
+  });
+  input.addEventListener('change', function(){
+    if(this.files[0]){
+      handleZoneFile(this.files[0], zone, nameEl, onFile);
+    }
+  });
+}
+
+function handleZoneFile(file, zone, nameEl, onFile){
+  zone.classList.add('has-file');
+  nameEl.textContent = file.name;
+  /* Hide the drop messages */
+  var msgs = zone.querySelectorAll('.drop-msg, .fallback-btn');
+  for(var i = 0; i < msgs.length; i++) msgs[i].style.display = 'none';
+  onFile(file);
+}
+
+setupDropZone('srcZone', 'srcInput', 'srcName', function(file){
+  srcFile = file;
   checkReady();
-};
-dstInput.onchange = function(){
-  document.getElementById('dstPdfName').textContent = this.files[0] ? this.files[0].name : '';
+});
+setupDropZone('dstZone', 'dstInput', 'dstName', function(file){
+  dstFile = file;
   checkReady();
-};
+});
+
 function checkReady(){
-  transferBtn.style.display = (srcInput.files[0] && dstInput.files[0]) ? 'inline-block' : 'none';
+  transferBtn.style.display = (srcFile && dstFile) ? 'inline-block' : 'none';
 }
 
 /* ================================================================
    MAIN: Transfer annotations from source PDF to destination PDF
    ================================================================ */
 transferBtn.onclick = async function(){
-  var srcFile = srcInput.files[0];
-  var dstFile = dstInput.files[0];
   if(!srcFile || !dstFile) return;
 
   transferBtn.disabled = true;
@@ -167,8 +279,7 @@ transferBtn.onclick = async function(){
   try {
     ensurePdfLib();
 
-    /* Step 1: Read annotations from source PDF */
-    log('Reading source PDF annotations...');
+    log('Reading old PDF annotations...');
     var srcData = new Uint8Array(await srcFile.arrayBuffer());
     var srcLib = await PDFDocument.load(srcData, {ignoreEncryption: true});
     var srcPages = srcLib.getPages();
@@ -188,7 +299,6 @@ transferBtn.onclick = async function(){
           var st = ad.get(PDFName.of('Subtype'));
           if(!st) continue;
 
-          /* Extract all fields from this annotation dict */
           var fields = extractAnnotFields(ad, srcLib);
           if(!fields) continue;
           fields.page = pi;
@@ -200,7 +310,7 @@ transferBtn.onclick = async function(){
       }
     }
 
-    log('Found ' + totalAnnots + ' annotation(s) across ' + srcPages.length + ' source page(s).');
+    log('Found ' + totalAnnots + ' annotation(s) across ' + srcPages.length + ' page(s).');
     if(!totalAnnots){
       log('No annotations to transfer.');
       transferBtn.disabled = false;
@@ -208,8 +318,7 @@ transferBtn.onclick = async function(){
       return;
     }
 
-    /* Step 2: Apply annotations to destination PDF */
-    log('Loading destination PDF...');
+    log('Loading new PDF...');
     var dstData = new Uint8Array(await dstFile.arrayBuffer());
     var dstLib = await PDFDocument.load(dstData, {ignoreEncryption: true, updateMetadata: false});
     var dstPages = dstLib.getPages();
@@ -218,7 +327,7 @@ transferBtn.onclick = async function(){
     for(var pgIdx in annotsByPage){
       var pi = parseInt(pgIdx);
       if(pi >= dstPages.length){
-        log('Warning: source page ' + (pi+1) + ' has no matching destination page, skipping ' + annotsByPage[pgIdx].length + ' annotation(s).');
+        log('Warning: old page ' + (pi+1) + ' has no matching new page, skipping ' + annotsByPage[pgIdx].length + ' annotation(s).');
         continue;
       }
       var page = dstPages[pi];
@@ -229,13 +338,10 @@ transferBtn.onclick = async function(){
           var annotDict = buildAnnotDict(dstLib, pageAnnots[k]);
           var annotRef = dstLib.context.register(annotDict);
 
-          /* Add to page's /Annots array */
           var existing = page.node.get(PDFName.of('Annots'));
           if(existing){
             var arr = page.node.lookup(PDFName.of('Annots'));
-            if(arr instanceof PDFArray){
-              arr.push(annotRef);
-            }
+            if(arr instanceof PDFArray) arr.push(annotRef);
           } else {
             var newArr = dstLib.context.obj([annotRef]);
             page.node.set(PDFName.of('Annots'), newArr);
@@ -247,7 +353,7 @@ transferBtn.onclick = async function(){
       }
     }
 
-    log('Applied ' + added + ' annotation(s) to destination PDF.');
+    log('Applied ' + added + ' annotation(s) to new PDF.');
     log('Saving...');
 
     var outBytes = await dstLib.save();
@@ -255,7 +361,7 @@ transferBtn.onclick = async function(){
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = dstFile.name.replace(/\.pdf$/i, '') + '_transferred.pdf';
+    a.download = dstFile.name.replace(/\.pdf$/i, '') + '_annos.pdf';
     a.click();
 
     log('Done! Open in Adobe Acrobat to see annotations.');
@@ -270,7 +376,6 @@ transferBtn.onclick = async function(){
 
 /* ================================================================
    EXTRACT all fields from a pdf-lib annotation dict
-   Returns a plain JS object with string/array values
    ================================================================ */
 function extractAnnotFields(ad, lib){
   var st = ad.get(PDFName.of('Subtype'));
@@ -282,7 +387,6 @@ function extractAnnotFields(ad, lib){
   o.subtype = st.toString().replace('/','');
   o.rect = rect.toString();
 
-  /* Every known annotation field — raw .toString() passthrough */
   var stringFields = ['Contents','T','Subj','DA','DS','NM','M','RC','CreationDate'];
   var arrayFields = ['C','BC','IC','L','RD','Border','QuadPoints','Vertices','LE','CL'];
   var dictFields = ['BS','MK'];
@@ -329,11 +433,9 @@ function buildAnnotDict(lib, a){
   dict.set(PDFName.of('Type'), PDFName.of('Annot'));
   dict.set(PDFName.of('Subtype'), PDFName.of(a.subtype));
 
-  /* Rect */
   var rectNums = parseNumArray(a.rect);
   if(rectNums) dict.set(PDFName.of('Rect'), lib.context.obj(rectNums));
 
-  /* String fields — strip outer parens, write as PDFString */
   var stringMap = {
     'str_Contents':'Contents', 'str_T':'T', 'str_Subj':'Subj',
     'str_DA':'DA', 'str_DS':'DS', 'str_NM':'NM', 'str_M':'M',
@@ -343,7 +445,6 @@ function buildAnnotDict(lib, a){
     if(a[key]) dict.set(PDFName.of(stringMap[key]), stripParensToString(a[key]));
   }
 
-  /* Array fields — parse numbers */
   var arrayMap = {
     'arr_C':'C', 'arr_BC':'BC', 'arr_IC':'IC', 'arr_L':'L',
     'arr_RD':'RD', 'arr_Border':'Border', 'arr_QuadPoints':'QuadPoints',
@@ -356,7 +457,6 @@ function buildAnnotDict(lib, a){
     }
   }
 
-  /* LE — array of names like [/None /None] */
   if(a['arr_LE']){
     var leStr = a['arr_LE'];
     var leNames = leStr.match(/\/\w+/g);
@@ -367,7 +467,6 @@ function buildAnnotDict(lib, a){
     }
   }
 
-  /* Dict fields — parse /BS << /W 2 >> etc */
   if(a['dict_BS']){
     var bsStr = a['dict_BS'];
     var bsDict = lib.context.obj({});
@@ -377,29 +476,22 @@ function buildAnnotDict(lib, a){
     if(sMatch) bsDict.set(PDFName.of('S'), PDFName.of(sMatch[1]));
     dict.set(PDFName.of('BS'), bsDict);
   }
-  if(a['dict_MK']){
-    /* MK can be complex — skip for now, rarely needed */
-  }
 
-  /* Number fields */
   var numMap = {'num_CA':'CA', 'num_F':'F', 'num_Ff':'Ff', 'num_Q':'Q', 'num_LL':'LL', 'num_LLE':'LLE'};
   for(var key in numMap){
     if(a[key]) dict.set(PDFName.of(numMap[key]), PDFNumber.of(parseFloat(a[key])));
   }
 
-  /* Name fields */
   var nameMap = {'name_IT':'IT', 'name_Name':'Name'};
   for(var key in nameMap){
     if(a[key]) dict.set(PDFName.of(nameMap[key]), PDFName.of(a[key].replace('/','').trim()));
   }
 
-  /* Set print flag if not already set */
   if(!a['num_F']) dict.set(PDFName.of('F'), PDFNumber.of(4));
 
   return dict;
 }
 
-/* Parse "[1.0 2.0 3.0 4.0]" or "1.0 2.0 3.0 4.0" into number array */
 function parseNumArray(str){
   if(!str) return null;
   var clean = str.replace(/[\[\]]/g, '').trim();
@@ -413,7 +505,6 @@ function parseNumArray(str){
   return nums.length ? nums : null;
 }
 
-/* Strip outer parens from "(content)" and create PDFString */
 function stripParensToString(raw){
   if(!raw) return PDFString.of('');
   var s = raw;
