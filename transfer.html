@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Transfer Annos</title>
+<script src="pdf-lib.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+    background: #f5f6fa;
+    color: #222;
+    text-align: center;
+    padding: 30px;
+  }
+  .back-link { display:inline-block; margin-bottom:20px; color:#0078ff; text-decoration:none; }
+  .back-link:hover { text-decoration:underline; }
+  h1 { font-size:28px; font-weight:700; color:#1a1a2e; margin-bottom:8px; }
+  .subtitle { color:#666; margin-bottom:30px; font-size:15px; }
+
+  .custom-file-input { display:inline-block; }
+  .custom-file-input input[type="file"] { display:none; }
+  .custom-file-input label {
+    display: inline-block;
+    padding: 12px 20px;
+    background: #0078ff;
+    color: #fff;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: background 0.15s;
+  }
+  .custom-file-input label:hover { background:#005fd1; }
+  .file-name { display:block; margin-top:10px; font-size:13px; color:#666; font-style:italic; min-height:20px; }
+
+  #downloadBtn {
+    display: none;
+    margin: 24px auto;
+    padding: 14px 28px;
+    border-radius: 8px;
+    border: none;
+    font-size: 17px;
+    font-weight: 600;
+    cursor: pointer;
+    color: #fff;
+    background: #28a745;
+    transition: background 0.15s;
+  }
+  #downloadBtn:hover { background:#1e7e34; }
+  #downloadBtn:disabled { background:#aaa; cursor:default; }
+
+  #status {
+    margin: 20px auto;
+    max-width: 600px;
+    font-size: 14px;
+    text-align: left;
+    background: #fff;
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    white-space: pre-wrap;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<a href="index.html" class="back-link">&larr; Back</a>
+<h1>Transfer Annos</h1>
+<p class="subtitle">Extract annotations from a PDF into an FDF file</p>
+
+<div class="custom-file-input">
+  <label for="pdfFile">Select a PDF</label>
+  <input type="file" id="pdfFile" accept="application/pdf" />
+</div>
+<span id="pdfFileName" class="file-name"></span>
+
+<br />
+<button id="downloadBtn">Download .fdf</button>
+
+<div id="status"></div>
+
+<script>
+var PDFDocument, PDFName, PDFArray, PDFDict, PDFString, PDFHexString;
+function ensurePdfLib(){
+  if(!PDFDocument && typeof PDFLib !== 'undefined')
+    ({PDFDocument,PDFName,PDFArray,PDFDict,PDFString,PDFHexString} = PDFLib);
+}
+
+var pdfInput = document.getElementById('pdfFile');
+var downloadBtn = document.getElementById('downloadBtn');
+var statusEl = document.getElementById('status');
+
+pdfInput.onchange = function(){
+  var name = this.files[0] ? this.files[0].name : '';
+  document.getElementById('pdfFileName').textContent = name;
+  downloadBtn.style.display = this.files[0] ? 'inline-block' : 'none';
+  statusEl.style.display = 'none';
+};
+
+downloadBtn.onclick = async function(){
+  var file = pdfInput.files[0];
+  if(!file) return;
+  downloadBtn.disabled = true;
+  downloadBtn.textContent = 'Extracting...';
+  statusEl.style.display = 'block';
+  statusEl.textContent = 'Loading PDF...\n';
+
+  try {
+    ensurePdfLib();
+    var data = new Uint8Array(await file.arrayBuffer());
+    var lib = await PDFDocument.load(data, {ignoreEncryption: true});
+    var pages = lib.getPages();
+    var blocks = [];
+    var totalAnnots = 0;
+
+    for(var pi = 0; pi < pages.length; pi++){
+      var annotsRef = pages[pi].node.get(PDFName.of('Annots'));
+      if(!annotsRef) continue;
+      var annots = pages[pi].node.lookup(PDFName.of('Annots'));
+      if(!annots || !(annots instanceof PDFArray)) continue;
+
+      for(var j = 0; j < annots.size(); j++){
+        try {
+          var ad = lib.context.lookup(annots.get(j));
+          if(!(ad instanceof PDFDict)) continue;
+          var st = ad.get(PDFName.of('Subtype'));
+          if(!st) continue;
+          var subtype = st.toString().replace('/', '');
+
+          var block = buildFdfBlock(ad, subtype, pi, lib);
+          if(block){
+            blocks.push(block);
+            totalAnnots++;
+          }
+        } catch(e){}
+      }
+    }
+
+    statusEl.textContent += 'Found ' + totalAnnots + ' annotation(s) across ' + pages.length + ' page(s).\n';
+
+    if(!totalAnnots){
+      statusEl.textContent += 'No annotations found in this PDF.';
+      downloadBtn.disabled = false;
+      downloadBtn.textContent = 'Download .fdf';
+      return;
+    }
+
+    var fdf = '%FDF-1.2\n1 0 obj\n<< /FDF << /Annots [\n' + blocks.join('\n') + '\n] >> >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF';
+    var blob = new Blob([fdf], {type: 'application/vnd.fdf'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = file.name.replace(/\.pdf$/i, '') + '.fdf';
+    a.click();
+
+    statusEl.textContent += 'Done! FDF downloaded.';
+  } catch(err){
+    statusEl.textContent += '\nError: ' + err.message;
+    console.error(err);
+  }
+  downloadBtn.disabled = false;
+  downloadBtn.textContent = 'Download .fdf';
+};
+
+/* Build a single FDF annotation block by reading raw values from the dict */
+function buildFdfBlock(ad, subtype, pageIdx, lib){
+  var rect = readRawArray(ad.get(PDFName.of('Rect')));
+  if(!rect) return null;
+
+  var b = '<<\n/Type /Annot\n/Subtype /' + subtype + '\n/Rect [' + rect + ']\n/Page ' + pageIdx;
+
+  /* Contents — raw passthrough to preserve encoding perfectly */
+  var contents = ad.get(PDFName.of('Contents'));
+  if(contents) b += '\n/Contents ' + contents.toString();
+
+  /* Title / Author */
+  var t = ad.get(PDFName.of('T'));
+  if(t) b += '\n/T ' + t.toString();
+
+  /* Subject */
+  var subj = ad.get(PDFName.of('Subj'));
+  if(subj) b += '\n/Subj ' + subj.toString();
+
+  /* Colors */
+  var c = ad.get(PDFName.of('C'));
+  if(c) b += '\n/C ' + c.toString();
+  var bc = ad.get(PDFName.of('BC'));
+  if(bc) b += '\n/BC ' + bc.toString();
+  var ic = ad.get(PDFName.of('IC'));
+  if(ic) b += '\n/IC ' + ic.toString();
+
+  /* Appearance fields */
+  var da = ad.get(PDFName.of('DA'));
+  if(da) b += '\n/DA ' + da.toString();
+  var ds = ad.get(PDFName.of('DS'));
+  if(ds) b += '\n/DS ' + ds.toString();
+
+  /* Border */
+  var bs = ad.get(PDFName.of('BS'));
+  if(bs) b += '\n/BS ' + bs.toString();
+  var border = ad.get(PDFName.of('Border'));
+  if(border) b += '\n/Border ' + border.toString();
+
+  /* Line endpoints */
+  var l = ad.get(PDFName.of('L'));
+  if(l) b += '\n/L ' + l.toString();
+
+  /* Line ending styles */
+  var le = ad.get(PDFName.of('LE'));
+  if(le) b += '\n/LE ' + le.toString();
+
+  /* Quadpoints (for highlights, underlines, etc) */
+  var qp = ad.get(PDFName.of('QuadPoints'));
+  if(qp) b += '\n/QuadPoints ' + qp.toString();
+
+  /* Vertices (for polygons, polylines) */
+  var verts = ad.get(PDFName.of('Vertices'));
+  if(verts) b += '\n/Vertices ' + verts.toString();
+
+  /* InkList */
+  var ink = ad.get(PDFName.of('InkList'));
+  if(ink) b += '\n/InkList ' + ink.toString();
+
+  /* Flags */
+  var f = ad.get(PDFName.of('F'));
+  if(f) b += '\n/F ' + f.toString();
+
+  /* Name (for stamps, icons) */
+  var nm = ad.get(PDFName.of('Name'));
+  if(nm) b += '\n/Name ' + nm.toString();
+
+  /* Opacity */
+  var ca = ad.get(PDFName.of('CA'));
+  if(ca) b += '\n/CA ' + ca.toString();
+
+  /* Rich text */
+  var rc = ad.get(PDFName.of('RC'));
+  if(rc) b += '\n/RC ' + rc.toString();
+
+  /* Callout line */
+  var cl = ad.get(PDFName.of('CL'));
+  if(cl) b += '\n/CL ' + cl.toString();
+
+  /* Intent */
+  var it = ad.get(PDFName.of('IT'));
+  if(it) b += '\n/IT ' + it.toString();
+
+  b += '\n>>';
+  return b;
+}
+
+function readRawArray(o){
+  if(!o) return null;
+  return o.toString().replace(/[\[\]]/g, '').trim();
+}
+</script>
+</body>
+</html>
