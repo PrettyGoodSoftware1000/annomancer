@@ -543,10 +543,7 @@ function getSharedFontRef(lib){
 function generateAppearanceStream(lib, a){
   if(a.subtype === 'Square') return generateSquareAP(lib, a);
   if(a.subtype === 'Line') return generateLineAP(lib, a);
-  /* FreeText: don't generate AP — Adobe silently rebuilds it from /DA + /RC + /DS
-     which we transfer perfectly. Our generated AP had color/clipping issues
-     because Adobe's FreeText rendering is complex (rich text, precise metrics).
-     Letting Adobe handle it produces pixel-perfect results. */
+  if(a.subtype === 'FreeText') return generateFreeTextAP(lib, a);
   return null;
 }
 
@@ -631,61 +628,72 @@ function generateFreeTextAP(lib, a){
   var x1 = Math.min(rect[0],rect[2]), y1 = Math.min(rect[1],rect[3]);
   var x2 = Math.max(rect[0],rect[2]), y2 = Math.max(rect[1],rect[3]);
 
-  /* Get fill color from /C (background — usually near-white) */
+  /* Parse /DA string — this is the single source of truth for font + text color.
+     Example: "0.235 0.706 0.294 rg /Arial 10 Tf" */
+  var daStr = '';
+  if(a['str_DA']){
+    daStr = a['str_DA'];
+    if(daStr.charAt(0) === '(') daStr = daStr.substring(1, daStr.length - 1);
+  }
+
+  var fontName = 'Helv';
+  var fontSize = 10;
+  var textColor = null;
+  var fontMatch = daStr.match(/\/(\S+)\s+([\d.]+)\s+Tf/);
+  if(fontMatch){ fontName = fontMatch[1]; fontSize = parseFloat(fontMatch[2]); }
+  var daColorMatch = daStr.match(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+rg/);
+  if(daColorMatch) textColor = [parseFloat(daColorMatch[1]), parseFloat(daColorMatch[2]), parseFloat(daColorMatch[3])];
+
+  /* Border color: try /BC first, then fall back to text color from /DA, then /DS hex */
+  var strokeColor = null;
+  if(a['arr_BC']){
+    var bc = parseNumArray(a['arr_BC']);
+    if(bc && bc.length >= 3) strokeColor = bc;
+  }
+  if(!strokeColor && textColor) strokeColor = textColor.slice();
+  if(!strokeColor && a['str_DS']){
+    var dsStr = a['str_DS'];
+    if(dsStr.charAt(0) === '(') dsStr = dsStr.substring(1, dsStr.length - 1);
+    var hexMatch = dsStr.match(/color:\s*#([0-9a-fA-F]{6})/);
+    if(hexMatch){
+      var hex = hexMatch[1];
+      strokeColor = [parseInt(hex.substr(0,2),16)/255, parseInt(hex.substr(2,2),16)/255, parseInt(hex.substr(4,2),16)/255];
+    }
+  }
+  if(!strokeColor) strokeColor = [0, 0, 0];
+  if(!textColor) textColor = strokeColor.slice();
+
+  /* Fill color from /C (background) */
   var fillColor = [1, 1, 0.988235];
   if(a['arr_C']){
     var c = parseNumArray(a['arr_C']);
     if(c && c.length >= 3) fillColor = c;
   }
 
-  /* Get border/stroke color from /BC */
-  var strokeColor = [0, 0, 0];
-  if(a['arr_BC']){
-    var bc = parseNumArray(a['arr_BC']);
-    if(bc && bc.length >= 3) strokeColor = bc;
-  }
-
-  /* Get border width */
+  /* Border width from /BS */
   var lineWidth = 2;
   if(a['dict_BS']){
     var wm = a['dict_BS'].match(/\/W\s+([\d.]+)/);
     if(wm) lineWidth = parseFloat(wm[1]);
   }
 
-  /* Parse font name and size from /DA string, e.g. "0.235 0.706 0.294 rg /Arial 10 Tf" */
-  var fontName = 'Helv';
-  var fontSize = 10;
-  var textColor = strokeColor.slice(); /* default text color = border color */
-  if(a['str_DA']){
-    var daStr = a['str_DA'];
-    /* Strip outer parens */
-    if(daStr.charAt(0) === '(') daStr = daStr.substring(1, daStr.length - 1);
-    /* Extract font: /FontName Size Tf */
-    var fontMatch = daStr.match(/\/(\S+)\s+([\d.]+)\s+Tf/);
-    if(fontMatch){
-      fontName = fontMatch[1];
-      fontSize = parseFloat(fontMatch[2]);
-    }
-    /* Extract text color: R G B rg */
-    var colorMatch = daStr.match(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+rg/);
-    if(colorMatch){
-      textColor = [parseFloat(colorMatch[1]), parseFloat(colorMatch[2]), parseFloat(colorMatch[3])];
-    }
-  }
-
-  /* Get text content from /Contents */
+  /* Text content from /Contents */
   var text = '';
   if(a['str_Contents']){
     text = a['str_Contents'];
     if(text.charAt(0) === '(') text = text.substring(1, text.length - 1);
   }
 
-  /* Split text into lines for multi-line support */
+  /* Split text into lines */
   var lines = text.split(/\\r|\\n|\r|\n/);
 
-  /* Calculate geometry — matching Adobe's exact pattern */
-  var pad = 1; /* outer padding from annotation rect */
-  var innerPad = 3; /* additional inner padding for text clip area */
+  /* Round colors to 6 decimal places like Adobe does */
+  function r6(n){ return Math.round(n * 1000000) / 1000000; }
+  function escPdf(s){ return s.replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)'); }
+
+  /* Geometry — matching Adobe's exact pattern from the decompressed streams */
+  var pad = 1;
+  var innerPad = 3;
   var outerX = x1 + pad;
   var outerY = y1 + pad;
   var outerW = (x2 - x1) - pad * 2;
@@ -695,39 +703,43 @@ function generateFreeTextAP(lib, a){
   var clipW = outerW - innerPad * 2;
   var clipH = outerH - innerPad * 2;
 
-  /* Text baseline: start from top of clip area, descend by font size per line */
+  /* Text Y: Adobe places first baseline at clipTop - fontSize * 0.2 (ascent offset) */
   var lineHeight = fontSize * 1.2;
-  var textStartY = clipY + clipH - fontSize + 2; /* baseline of first line */
+  var textStartY = y2 - pad - innerPad - fontSize + (fontSize * 0.104);
 
-  /* Escape parentheses in text for PDF string */
-  function escPdf(s){
-    return s.replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)');
-  }
-
-  /* Build the stream — matches Adobe's FreeText AP format */
+  /* Build the stream — matching Adobe's decompressed FreeText AP exactly */
   var stream = '';
+
   /* 1. Fill background + stroke border */
-  stream += fillColor[0]+' '+fillColor[1]+' '+fillColor[2]+' rg\n';
-  stream += strokeColor[0]+' '+strokeColor[1]+' '+strokeColor[2]+' RG\n';
-  stream += lineWidth + ' w\n';
+  stream += r6(fillColor[0])+' '+r6(fillColor[1])+' '+r6(fillColor[2])+' rg\n';
+  stream += r6(strokeColor[0])+' '+r6(strokeColor[1])+' '+r6(strokeColor[2])+' RG\n';
+  stream += lineWidth+' w\n';
   stream += outerX+' '+outerY+' '+outerW+' '+outerH+' re\n';
   stream += 'B\n';
+
   /* 2. Clip to text area */
   stream += 'q\n';
   stream += '1 0 0 1 0 0 cm\n';
   stream += clipX+' '+clipY+' '+clipW+' '+clipH+' re\n';
   stream += 'W\nn\n';
+
   /* 3. Draw text */
   stream += '0 g\n0 G\n1 w\n';
   stream += 'BT\n';
-  stream += '/' + fontName + ' ' + fontSize + ' Tf\n';
-  stream += textColor[0]+' '+textColor[1]+' '+textColor[2]+' rg\n';
-  for(var i = 0; i < lines.length; i++){
-    var ly = textStartY - (i * lineHeight);
-    stream += clipX + ' ' + ly + ' Td\n';
-    stream += '(' + escPdf(lines[i]) + ') Tj\n';
-    /* After first Td, subsequent ones are relative — but using absolute is simpler and works */
+  stream += '/'+fontName+' '+fontSize+' Tf\n';
+  stream += r6(textColor[0])+' '+r6(textColor[1])+' '+r6(textColor[2])+' rg\n';
+
+  /* First line: absolute position with Td */
+  if(lines.length > 0){
+    stream += clipX+' '+r6(textStartY)+' Td\n';
+    stream += '('+escPdf(lines[0])+') Tj\n';
   }
+  /* Subsequent lines: relative Td (0, -lineHeight) from previous position */
+  for(var i = 1; i < lines.length; i++){
+    stream += '0 '+r6(-lineHeight)+' Td\n';
+    stream += '('+escPdf(lines[i])+') Tj\n';
+  }
+
   stream += 'ET\n';
   stream += 'Q\n';
 
