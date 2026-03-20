@@ -543,7 +543,10 @@ function getSharedFontRef(lib){
 function generateAppearanceStream(lib, a){
   if(a.subtype === 'Square') return generateSquareAP(lib, a);
   if(a.subtype === 'Line') return generateLineAP(lib, a);
-  if(a.subtype === 'FreeText') return generateFreeTextAP(lib, a);
+  /* FreeText: don't generate AP — Adobe silently rebuilds it from /DA + /RC + /DS
+     which we transfer perfectly. Our generated AP had color/clipping issues
+     because Adobe's FreeText rendering is complex (rich text, precise metrics).
+     Letting Adobe handle it produces pixel-perfect results. */
   return null;
 }
 
