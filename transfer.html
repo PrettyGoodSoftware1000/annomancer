@@ -622,14 +622,49 @@ function generateLineAP(lib, a){
   return buildAPDict(lib, rect, stream, null);
 }
 
+/* Helvetica character widths (1/1000 unit) for text wrapping */
+var HELV_WIDTHS = {' ':278,'!':278,'"':355,'#':556,'$':556,'%':889,'&':667,'\'':191,'(':333,')':333,'*':389,'+':584,',':278,'-':333,'.':278,'/':278,'0':556,'1':556,'2':556,'3':556,'4':556,'5':556,'6':556,'7':556,'8':556,'9':556,':':278,';':278,'<':584,'=':584,'>':584,'?':556,'@':1015,'A':667,'B':667,'C':722,'D':722,'E':667,'F':611,'G':778,'H':722,'I':278,'J':500,'K':667,'L':556,'M':833,'N':722,'O':778,'P':667,'Q':778,'R':722,'S':667,'T':611,'U':722,'V':667,'W':944,'X':667,'Y':667,'Z':611,'[':278,'\\':278,']':278,'^':469,'_':556,'`':333,'a':556,'b':556,'c':500,'d':556,'e':556,'f':278,'g':556,'h':556,'i':222,'j':222,'k':500,'l':222,'m':833,'n':556,'o':556,'p':556,'q':556,'r':333,'s':500,'t':278,'u':556,'v':500,'w':722,'x':500,'y':500,'z':500,'{':334,'|':260,'}':334,'~':584};
+
+function charWidth(ch, fontSize){
+  var w = HELV_WIDTHS[ch] || 556;
+  return (w / 1000) * fontSize;
+}
+
+function textWidth(str, fontSize){
+  var total = 0;
+  for(var i = 0; i < str.length; i++) total += charWidth(str[i], fontSize);
+  return total;
+}
+
+/* Wrap text to fit within maxWidth, returns array of lines */
+function wrapText(text, fontSize, maxWidth){
+  var lines = [];
+  var currentLine = '';
+  var currentWidth = 0;
+
+  for(var i = 0; i < text.length; i++){
+    var ch = text[i];
+    var w = charWidth(ch, fontSize);
+    if(currentWidth + w > maxWidth && currentLine.length > 0){
+      lines.push(currentLine);
+      currentLine = ch;
+      currentWidth = w;
+    } else {
+      currentLine += ch;
+      currentWidth += w;
+    }
+  }
+  if(currentLine.length > 0) lines.push(currentLine);
+  return lines;
+}
+
 function generateFreeTextAP(lib, a){
   var rect = parseNumArray(a.rect);
   if(!rect || rect.length < 4) return null;
   var x1 = Math.min(rect[0],rect[2]), y1 = Math.min(rect[1],rect[3]);
   var x2 = Math.max(rect[0],rect[2]), y2 = Math.max(rect[1],rect[3]);
 
-  /* Parse /DA string — this is the single source of truth for font + text color.
-     Example: "0.235 0.706 0.294 rg /Arial 10 Tf" */
+  /* Parse /DA string for font + text color */
   var daStr = '';
   if(a['str_DA']){
     daStr = a['str_DA'];
@@ -644,7 +679,7 @@ function generateFreeTextAP(lib, a){
   var daColorMatch = daStr.match(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+rg/);
   if(daColorMatch) textColor = [parseFloat(daColorMatch[1]), parseFloat(daColorMatch[2]), parseFloat(daColorMatch[3])];
 
-  /* Border color: try /BC first, then fall back to text color from /DA, then /DS hex */
+  /* Border color: /BC -> /DA color -> /DS hex -> black */
   var strokeColor = null;
   if(a['arr_BC']){
     var bc = parseNumArray(a['arr_BC']);
@@ -663,35 +698,31 @@ function generateFreeTextAP(lib, a){
   if(!strokeColor) strokeColor = [0, 0, 0];
   if(!textColor) textColor = strokeColor.slice();
 
-  /* Fill color from /C (background) */
+  /* Fill color from /C */
   var fillColor = [1, 1, 0.988235];
   if(a['arr_C']){
     var c = parseNumArray(a['arr_C']);
     if(c && c.length >= 3) fillColor = c;
   }
 
-  /* Border width from /BS */
+  /* Border width */
   var lineWidth = 2;
   if(a['dict_BS']){
     var wm = a['dict_BS'].match(/\/W\s+([\d.]+)/);
     if(wm) lineWidth = parseFloat(wm[1]);
   }
 
-  /* Text content from /Contents */
+  /* Text from /Contents */
   var text = '';
   if(a['str_Contents']){
     text = a['str_Contents'];
     if(text.charAt(0) === '(') text = text.substring(1, text.length - 1);
   }
 
-  /* Split text into lines */
-  var lines = text.split(/\\r|\\n|\r|\n/);
-
-  /* Round colors to 6 decimal places like Adobe does */
   function r6(n){ return Math.round(n * 1000000) / 1000000; }
   function escPdf(s){ return s.replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)'); }
 
-  /* Geometry — matching Adobe's exact pattern from the decompressed streams */
+  /* Geometry */
   var pad = 1;
   var innerPad = 3;
   var outerX = x1 + pad;
@@ -703,47 +734,47 @@ function generateFreeTextAP(lib, a){
   var clipW = outerW - innerPad * 2;
   var clipH = outerH - innerPad * 2;
 
-  /* Text Y: Adobe places first baseline at clipTop - fontSize * 0.2 (ascent offset) */
+  /* Word-wrap text to fit clip width using Helvetica metrics */
   var lineHeight = fontSize * 1.2;
+  var wrappedLines = wrapText(text, fontSize, clipW);
+
+  /* Text Y: Adobe starts at clipTop - small offset, then descends by lineHeight */
   var textStartY = y2 - pad - innerPad - fontSize + (fontSize * 0.104);
 
-  /* Build the stream — matching Adobe's decompressed FreeText AP exactly */
+  /* Build stream matching Adobe's format */
   var stream = '';
 
-  /* 1. Fill background + stroke border */
+  /* 1. Background + border */
   stream += r6(fillColor[0])+' '+r6(fillColor[1])+' '+r6(fillColor[2])+' rg\n';
   stream += r6(strokeColor[0])+' '+r6(strokeColor[1])+' '+r6(strokeColor[2])+' RG\n';
   stream += lineWidth+' w\n';
   stream += outerX+' '+outerY+' '+outerW+' '+outerH+' re\n';
   stream += 'B\n';
 
-  /* 2. Clip to text area */
+  /* 2. Clip */
   stream += 'q\n';
   stream += '1 0 0 1 0 0 cm\n';
   stream += clipX+' '+clipY+' '+clipW+' '+clipH+' re\n';
   stream += 'W\nn\n';
 
-  /* 3. Draw text */
+  /* 3. Text */
   stream += '0 g\n0 G\n1 w\n';
   stream += 'BT\n';
   stream += '/'+fontName+' '+fontSize+' Tf\n';
   stream += r6(textColor[0])+' '+r6(textColor[1])+' '+r6(textColor[2])+' rg\n';
 
-  /* First line: absolute position with Td */
-  if(lines.length > 0){
+  if(wrappedLines.length > 0){
     stream += clipX+' '+r6(textStartY)+' Td\n';
-    stream += '('+escPdf(lines[0])+') Tj\n';
+    stream += '('+escPdf(wrappedLines[0])+') Tj\n';
   }
-  /* Subsequent lines: relative Td (0, -lineHeight) from previous position */
-  for(var i = 1; i < lines.length; i++){
+  for(var i = 1; i < wrappedLines.length; i++){
     stream += '0 '+r6(-lineHeight)+' Td\n';
-    stream += '('+escPdf(lines[i])+') Tj\n';
+    stream += '('+escPdf(wrappedLines[i])+') Tj\n';
   }
 
   stream += 'ET\n';
   stream += 'Q\n';
 
-  /* Build with font resources */
   var fontRef = getSharedFontRef(lib);
   return buildAPDict(lib, rect, stream, {name: fontName, ref: fontRef});
 }
