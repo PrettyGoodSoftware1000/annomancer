@@ -518,6 +518,28 @@ function stripParensToString(raw){
   return PDFString.of(s);
 }
 
+/* Decode PDF string escape sequences for display in AP streams.
+   \r → CR, \n → LF, \\ → \, \( → (, \) → )
+   This converts the pdf-lib .toString() representation back to actual characters. */
+function decodePdfEscapes(s){
+  var result = '';
+  for(var i = 0; i < s.length; i++){
+    if(s[i] === '\\' && i + 1 < s.length){
+      var next = s[i+1];
+      if(next === 'r'){ result += '\r'; i++; }
+      else if(next === 'n'){ result += '\n'; i++; }
+      else if(next === 't'){ result += '\t'; i++; }
+      else if(next === '\\'){ result += '\\'; i++; }
+      else if(next === '('){ result += '('; i++; }
+      else if(next === ')'){ result += ')'; i++; }
+      else { result += s[i]; }
+    } else {
+      result += s[i];
+    }
+  }
+  return result;
+}
+
 /* ================================================================
    GENERATE /AP (Appearance Stream) for annotations
    Creates the visual rendering so Acrobat doesn't need to repair.
@@ -636,8 +658,10 @@ function textWidth(str, fontSize){
   return total;
 }
 
-/* Wrap text to fit within maxWidth, returns array of lines */
+/* Wrap text to fit within maxWidth using word-level breaking (matches Adobe's algorithm).
+   Breaks at space boundaries. Falls back to character-level for words wider than the line. */
 function wrapText(text, fontSize, maxWidth){
+  if(!text) return [''];
   var lines = [];
   var currentLine = '';
   var currentWidth = 0;
@@ -645,10 +669,22 @@ function wrapText(text, fontSize, maxWidth){
   for(var i = 0; i < text.length; i++){
     var ch = text[i];
     var w = charWidth(ch, fontSize);
+
     if(currentWidth + w > maxWidth && currentLine.length > 0){
-      lines.push(currentLine);
-      currentLine = ch;
-      currentWidth = w;
+      /* Need to wrap. Try to break at last space (word boundary) */
+      var lastSpace = currentLine.lastIndexOf(' ');
+      if(lastSpace > 0){
+        /* Word wrap: push line up to and including the space */
+        lines.push(currentLine.substring(0, lastSpace + 1));
+        var remainder = currentLine.substring(lastSpace + 1) + ch;
+        currentLine = remainder;
+        currentWidth = textWidth(remainder, fontSize);
+      } else {
+        /* No space: character wrap (single word wider than line) */
+        lines.push(currentLine);
+        currentLine = ch;
+        currentWidth = w;
+      }
     } else {
       currentLine += ch;
       currentWidth += w;
@@ -712,12 +748,14 @@ function generateFreeTextAP(lib, a){
     if(wm) lineWidth = parseFloat(wm[1]);
   }
 
-  /* Text from /Contents */
+  /* Text from /Contents — decode PDF escape sequences */
   var text = '';
   if(a['str_Contents']){
     text = a['str_Contents'];
     if(text.charAt(0) === '(') text = text.substring(1, text.length - 1);
   }
+  /* Decode PDF string escapes: \r → CR, \n → LF, \\ → \, \( → (, \) → ) */
+  text = decodePdfEscapes(text);
 
   function r6(n){ return Math.round(n * 1000000) / 1000000; }
   function escPdf(s){ return s.replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)'); }
@@ -734,9 +772,16 @@ function generateFreeTextAP(lib, a){
   var clipW = outerW - innerPad * 2;
   var clipH = outerH - innerPad * 2;
 
-  /* Word-wrap text to fit clip width using Helvetica metrics */
+  /* Word-wrap text to fit clip width using Helvetica metrics.
+     First split on actual line breaks (paragraphs), then wrap each one. */
   var lineHeight = fontSize * 1.2;
-  var wrappedLines = wrapText(text, fontSize, clipW);
+  var paragraphs = text.split(/\r\n|\r|\n/);
+  var wrappedLines = [];
+  for(var p = 0; p < paragraphs.length; p++){
+    var pLines = wrapText(paragraphs[p], fontSize, clipW);
+    if(pLines.length === 0) pLines = [''];
+    for(var pl = 0; pl < pLines.length; pl++) wrappedLines.push(pLines[pl]);
+  }
 
   /* Text Y: Adobe starts at clipTop - small offset, then descends by lineHeight */
   var textStartY = y2 - pad - innerPad - fontSize + (fontSize * 0.104);
