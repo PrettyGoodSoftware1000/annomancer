@@ -700,7 +700,8 @@ function generateFreeTextAP(lib, a){
   var x1 = Math.min(rect[0],rect[2]), y1 = Math.min(rect[1],rect[3]);
   var x2 = Math.max(rect[0],rect[2]), y2 = Math.max(rect[1],rect[3]);
 
-  /* Parse /DA string for font + text color */
+  /* Parse /DA string ONLY for font name and size — /DA color values are unreliable
+     (Adobe sometimes writes wrong colors in /DA after editing annotations) */
   var daStr = '';
   if(a['str_DA']){
     daStr = a['str_DA'];
@@ -709,30 +710,43 @@ function generateFreeTextAP(lib, a){
 
   var fontName = 'Helv';
   var fontSize = 10;
-  var textColor = null;
   var fontMatch = daStr.match(/\/(\S+)\s+([\d.]+)\s+Tf/);
   if(fontMatch){ fontName = fontMatch[1]; fontSize = parseFloat(fontMatch[2]); }
-  var daColorMatch = daStr.match(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+rg/);
-  if(daColorMatch) textColor = [parseFloat(daColorMatch[1]), parseFloat(daColorMatch[2]), parseFloat(daColorMatch[3])];
 
-  /* Border color: /BC -> /DA color -> /DS hex -> black */
-  var strokeColor = null;
-  if(a['arr_BC']){
-    var bc = parseNumArray(a['arr_BC']);
-    if(bc && bc.length >= 3) strokeColor = bc;
-  }
-  if(!strokeColor && textColor) strokeColor = textColor.slice();
-  if(!strokeColor && a['str_DS']){
+  /* Color priority for BOTH border and text (they match in Annomancer annotations):
+     1. /DS hex color (most reliable — Adobe preserves this correctly)
+     2. /BC array (border color — also reliable)
+     3. /DA rg values (UNRELIABLE — Adobe corrupts these)
+     4. black as last resort */
+  var annotColor = null;
+
+  /* Try /DS hex first */
+  if(a['str_DS']){
     var dsStr = a['str_DS'];
     if(dsStr.charAt(0) === '(') dsStr = dsStr.substring(1, dsStr.length - 1);
     var hexMatch = dsStr.match(/color:\s*#([0-9a-fA-F]{6})/);
     if(hexMatch){
       var hex = hexMatch[1];
-      strokeColor = [parseInt(hex.substr(0,2),16)/255, parseInt(hex.substr(2,2),16)/255, parseInt(hex.substr(4,2),16)/255];
+      annotColor = [parseInt(hex.substr(0,2),16)/255, parseInt(hex.substr(2,2),16)/255, parseInt(hex.substr(4,2),16)/255];
     }
   }
-  if(!strokeColor) strokeColor = [0, 0, 0];
-  if(!textColor) textColor = strokeColor.slice();
+
+  /* Try /BC array */
+  if(!annotColor && a['arr_BC']){
+    var bc = parseNumArray(a['arr_BC']);
+    if(bc && bc.length >= 3) annotColor = bc;
+  }
+
+  /* Last resort: /DA color (may be wrong) */
+  if(!annotColor){
+    var daColorMatch = daStr.match(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+rg/);
+    if(daColorMatch) annotColor = [parseFloat(daColorMatch[1]), parseFloat(daColorMatch[2]), parseFloat(daColorMatch[3])];
+  }
+
+  if(!annotColor) annotColor = [0, 0, 0];
+
+  var strokeColor = annotColor;
+  var textColor = annotColor;
 
   /* Fill color from /C */
   var fillColor = [1, 1, 0.988235];
