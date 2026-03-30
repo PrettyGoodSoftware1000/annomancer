@@ -37,7 +37,7 @@
 <body>
 
 <div class="version-tag">Herbert Nuker v10</div>
-<a href="index.html" class="back-link">← Back to Annomancer</a>
+<a href="index.html" class="back-link">← Back</a>
 <h1>🌀 Anno-Vacuum</h1>
 <p>Upload a PDF and colorize or extract annotations.</p>
 
@@ -292,7 +292,8 @@ document.getElementById("colorizeBtn").onclick=async function(){
 
 function updateFdfDownload(){
   var fdf=generateColorizedFDF(colorizedAnnots);
-  var blob=new Blob([fdf],{type:'application/vnd.fdf'}), url=URL.createObjectURL(blob);
+  var fdfBytes=new Uint8Array(fdf.length); for(var i=0;i<fdf.length;i++)fdfBytes[i]=fdf.charCodeAt(i)&0xFF;
+  var blob=new Blob([fdfBytes],{type:'application/vnd.fdf'}), url=URL.createObjectURL(blob);
   var nm=(pdfInput.files[0]?pdfInput.files[0].name:"file").replace(/\.pdf$/i,"");
   var dl=document.getElementById("colorizeDownloadLink");
   dl.href=url; dl.setAttribute("download",nm+" colorized.fdf");

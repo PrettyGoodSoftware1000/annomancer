@@ -632,7 +632,10 @@ function downloadFdf(){
   fdf += ']>>>>\r\nendobj\r\n';
   fdf += 'trailer\r\n<</Root 1 0 R>>\r\n%%EOF\r\n';
 
-  var blob = new Blob([fdf], {type:'application/vnd.fdf'});
+  /* Convert string to Latin-1 bytes to prevent UTF-8 corruption of binary marker */
+  var bytes = new Uint8Array(fdf.length);
+  for(var i = 0; i < fdf.length; i++) bytes[i] = fdf.charCodeAt(i) & 0xFF;
+  var blob = new Blob([bytes], {type:'application/vnd.fdf'});
   var url = URL.createObjectURL(blob);
   var a = document.createElement('a');
   a.href = url;
