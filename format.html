@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Format Annos</title>
+<script src="pdf-lib.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+    background: #f5f6fa;
+    color: #222;
+    min-height: 100vh;
+  }
+
+  .masthead {
+    width: 100%;
+    background: #1a1a2e;
+    display: flex;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .masthead img {
+    display: block;
+    max-width: 1536px;
+    width: 100%;
+    height: auto;
+  }
+
+  .page-content {
+    text-align: center;
+    padding: 30px;
+    max-width: 860px;
+    margin: 0 auto;
+  }
+
+  .back-link { display:inline-block; margin-bottom:20px; color:#0078ff; text-decoration:none; }
+  .back-link:hover { text-decoration:underline; }
+  h1 { font-size:28px; font-weight:700; color:#1a1a2e; margin-bottom:8px; }
+  .subtitle { color:#666; margin-bottom:30px; font-size:15px; }
+
+  /* Drop zone */
+  .drop-zone {
+    width: 100%;
+    max-width: 500px;
+    height: 160px;
+    border: 3px dashed #ccc;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #fff;
+    transition: all 0.2s ease;
+    cursor: pointer;
+    margin: 0 auto 28px;
+    padding: 16px;
+  }
+  .drop-zone:hover { border-color:#0078ff; background:#f0f7ff; }
+  .drop-zone.drag-over { border-color:#0078ff; background:#e0f0ff; transform:scale(1.02); }
+  .drop-zone.has-file { border-color:#28a745; background:#e8f5e9; }
+  .drop-zone h3 { margin:0 0 4px; color:#333; font-size:16px; }
+  .drop-zone .drop-msg { color:#888; font-size:14px; margin:4px 0; }
+  .drop-zone .file-name { margin-top:10px; font-weight:600; color:#28a745; word-break:break-all; font-size:13px; }
+  .drop-zone input[type="file"] { display:none; }
+  .drop-zone .fallback-btn {
+    margin-top:8px; padding:8px 16px; background:#0078ff; color:#fff;
+    border:none; border-radius:6px; cursor:pointer; font-size:13px;
+  }
+  .drop-zone .fallback-btn:hover { background:#005fd1; }
+
+  /* Panels */
+  .panel {
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    padding: 24px;
+    margin-bottom: 20px;
+    text-align: left;
+    display: none;
+  }
+  .panel h2 { font-size:16px; color:#1a1a2e; margin-bottom:14px; font-weight:600; }
+  .panel.visible { display:block; }
+
+  /* Summary */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .summary-card {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 12px;
+    text-align: center;
+  }
+  .summary-card .count { font-size:28px; font-weight:700; color:#1a1a2e; }
+  .summary-card .label { font-size:12px; color:#888; margin-top:2px; }
+
+  /* Color section */
+  .color-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+  .color-row label { font-size:14px; color:#555; min-width:160px; }
+  .color-row input[type="color"] {
+    width: 44px; height: 36px; border:2px solid #ddd; border-radius:6px;
+    cursor:pointer; padding:2px;
+  }
+  .color-row .hex-display { font-size:13px; color:#888; font-family:monospace; }
+
+  /* Current colors display */
+  .current-colors {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .color-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #f0f0f0;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: #555;
+  }
+  .color-chip .swatch {
+    width: 16px; height: 16px; border-radius: 3px;
+    border: 1px solid rgba(0,0,0,0.15);
+    display: inline-block;
+  }
+
+  /* Font section */
+  .font-btn {
+    padding: 10px 20px; border-radius:6px; border:none;
+    font-size:14px; cursor:pointer; color:#fff; background:#0078ff;
+    margin-right:8px; transition: background 0.15s;
+  }
+  .font-btn:hover { background:#005fd1; }
+  .font-btn.active { background:#28a745; }
+
+  /* Find/Replace */
+  .fr-row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+    align-items: center;
+  }
+  .fr-row input[type="text"] {
+    flex: 1; padding:10px 12px; border:2px solid #ddd; border-radius:6px;
+    font-size:14px; outline:none; transition: border-color 0.15s;
+  }
+  .fr-row input[type="text"]:focus { border-color:#0078ff; }
+  .fr-btn {
+    padding:10px 18px; border-radius:6px; border:none;
+    font-size:14px; cursor:pointer; color:#fff; background:#0078ff;
+  }
+  .fr-btn:hover { background:#005fd1; }
+  .fr-matches { font-size:13px; color:#888; margin-bottom:12px; }
+
+  /* Preview list */
+  .preview-list {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    margin-top: 12px;
+  }
+  .preview-item {
+    padding: 10px 14px;
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .preview-item:last-child { border-bottom:none; }
+  .preview-item .pi-swatch {
+    width:12px; height:12px; border-radius:2px;
+    border:1px solid rgba(0,0,0,0.15); flex-shrink:0;
+  }
+  .preview-item .pi-type { color:#888; font-size:11px; min-width:60px; }
+  .preview-item .pi-text { color:#333; word-break:break-all; }
+
+  /* Download */
+  .download-section { margin-top:24px; text-align:center; }
+  .dl-btn {
+    padding:14px 36px; border-radius:8px; border:none;
+    font-size:18px; font-weight:600; cursor:pointer;
+    color:#fff; background:#28a745; transition:background 0.15s;
+  }
+  .dl-btn:hover { background:#1e7e34; }
+
+  #status {
+    margin:20px auto; max-width:700px; font-size:13px; text-align:left;
+    background:#fff; border-radius:8px; padding:14px;
+    box-shadow:0 2px 6px rgba(0,0,0,0.1); white-space:pre-wrap; display:none;
+  }
+</style>
+</head>
+<body>
+
+<div class="masthead">
+  <img src="masthead.png" alt="Annomancer" width="1536" height="514" />
+</div>
+
+<div class="page-content">
+
+<a href="index.html" class="back-link">&larr; Back</a>
+<h1>Format Annos</h1>
+<p class="subtitle">Change colors, fonts, and text in your annotations</p>
+
+<div class="drop-zone" id="pdfZone">
+  <h3>Upload a PDF with annotations</h3>
+  <p class="drop-msg">Drop PDF here</p>
+  <p class="drop-msg">or</p>
+  <button class="fallback-btn" onclick="document.getElementById('pdfInput').click()">Select File</button>
+  <input type="file" id="pdfInput" accept="application/pdf" />
+  <div class="file-name" id="pdfName"></div>
+</div>
+
+<!-- Summary Panel -->
+<div class="panel" id="summaryPanel">
+  <h2>Annotations Found</h2>
+  <div class="summary-grid" id="summaryGrid"></div>
+  <div id="currentColorsLabel" style="font-size:13px;color:#888;margin-bottom:6px;">Colors in use:</div>
+  <div class="current-colors" id="currentColors"></div>
+  <div class="preview-list" id="annotPreview"></div>
+</div>
+
+<!-- Color Panel -->
+<div class="panel" id="colorPanel">
+  <h2>Change Colors</h2>
+  <div class="color-row">
+    <label>Borders &amp; lines:</label>
+    <input type="color" id="borderColor" value="#E6194B" />
+    <span class="hex-display" id="borderHex">#E6194B</span>
+  </div>
+  <div class="color-row">
+    <label>Text color:</label>
+    <input type="color" id="textColor" value="#E6194B" />
+    <span class="hex-display" id="textHex">#E6194B</span>
+  </div>
+</div>
+
+<!-- Font Panel -->
+<div class="panel" id="fontPanel">
+  <h2>Change Font</h2>
+  <button class="font-btn" id="fontArialBtn" onclick="setFont('Arial')">Arial</button>
+  <button class="font-btn" id="fontHelvBtn" onclick="setFont('Helvetica')">Helvetica</button>
+  <span id="fontStatus" style="margin-left:12px;font-size:13px;color:#888;"></span>
+</div>
+
+<!-- Find/Replace Panel -->
+<div class="panel" id="frPanel">
+  <h2>Find &amp; Replace</h2>
+  <div class="fr-row">
+    <input type="text" id="findInput" placeholder="Find text..." />
+  </div>
+  <div class="fr-row">
+    <input type="text" id="replaceInput" placeholder="Replace with..." />
+    <button class="fr-btn" onclick="doReplace()">Replace All</button>
+  </div>
+  <div class="fr-matches" id="frMatches"></div>
+</div>
+
+<!-- Download -->
+<div class="panel download-section" id="downloadPanel">
+  <button class="dl-btn" onclick="downloadFdf()">Download formatted .fdf</button>
+</div>
+
+<div id="status"></div>
+
+</div>
+
+<script>
+var PDFDocument, PDFName, PDFArray, PDFDict, PDFString, PDFHexString, PDFNumber, PDFStream, PDFRef;
+function ensurePdfLib(){
+  if(!PDFDocument && typeof PDFLib !== 'undefined'){
+    PDFDocument=PDFLib.PDFDocument; PDFName=PDFLib.PDFName; PDFArray=PDFLib.PDFArray;
+    PDFDict=PDFLib.PDFDict; PDFString=PDFLib.PDFString; PDFHexString=PDFLib.PDFHexString;
+    PDFNumber=PDFLib.PDFNumber; PDFStream=PDFLib.PDFStream; PDFRef=PDFLib.PDFRef;
+  }
+}
+
+var statusEl = document.getElementById('status');
+function log(msg){ statusEl.style.display='block'; statusEl.textContent+=msg+'\n'; }
+
+/* State */
+var annotations = []; /* array of extracted annotation objects */
+var pdfFileName = '';
+var chosenFont = null;
+
+/* ================================================================
+   DROP ZONE
+   ================================================================ */
+(function(){
+  var zone = document.getElementById('pdfZone');
+  var input = document.getElementById('pdfInput');
+  var nameEl = document.getElementById('pdfName');
+
+  zone.addEventListener('dragover', function(e){ e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', function(){ zone.classList.remove('drag-over'); });
+  zone.addEventListener('drop', function(e){
+    e.preventDefault(); zone.classList.remove('drag-over');
+    if(e.dataTransfer.files.length > 0 && e.dataTransfer.files[0].type === 'application/pdf')
+      handleFile(e.dataTransfer.files[0]);
+  });
+  zone.addEventListener('click', function(e){ if(e.target.tagName !== 'BUTTON') input.click(); });
+  input.addEventListener('change', function(){ if(this.files[0]) handleFile(this.files[0]); });
+
+  function handleFile(file){
+    zone.classList.add('has-file');
+    nameEl.textContent = file.name;
+    pdfFileName = file.name;
+    var msgs = zone.querySelectorAll('.drop-msg, .fallback-btn');
+    for(var i=0;i<msgs.length;i++) msgs[i].style.display='none';
+    loadPdf(file);
+  }
+})();
+
+/* ================================================================
+   LOAD PDF & EXTRACT ANNOTATIONS
+   ================================================================ */
+async function loadPdf(file){
+  statusEl.textContent = '';
+  log('Loading PDF...');
+  try {
+    ensurePdfLib();
+    var data = new Uint8Array(await file.arrayBuffer());
+    var lib = await PDFDocument.load(data, {ignoreEncryption:true});
+    var pages = lib.getPages();
+    annotations = [];
+
+    for(var pi=0; pi<pages.length; pi++){
+      var annotsRef = pages[pi].node.get(PDFName.of('Annots'));
+      if(!annotsRef) continue;
+      var annots = pages[pi].node.lookup(PDFName.of('Annots'));
+      if(!annots || !(annots instanceof PDFArray)) continue;
+
+      for(var j=0; j<annots.size(); j++){
+        try {
+          var ad = lib.context.lookup(annots.get(j));
+          if(!(ad instanceof PDFDict)) continue;
+          var st = ad.get(PDFName.of('Subtype'));
+          if(!st) continue;
+          var a = extractAnnot(ad, pi, lib);
+          if(a) annotations.push(a);
+        } catch(e){}
+      }
+    }
+
+    log('Found ' + annotations.length + ' annotations.');
+    showPanels();
+  } catch(err){
+    log('Error: ' + err.message);
+    console.error(err);
+  }
+}
+
+function extractAnnot(ad, pageIdx, lib){
+  var st = ad.get(PDFName.of('Subtype'));
+  if(!st) return null;
+  var subtype = st.toString().replace('/','');
+  var rect = ad.get(PDFName.of('Rect'));
+
+  var a = { subtype:subtype, page:pageIdx };
+  if(rect) a.rect = rect.toString();
+
+  /* Read all fields as raw strings */
+  var fields = ['Contents','T','Subj','DA','DS','NM','M','RC','CreationDate',
+    'C','BC','IC','L','RD','Border','QuadPoints','Vertices','LE','CL',
+    'BS','MK','CA','F','Ff','Q','LL','LLE','IT','Name','InkList'];
+  for(var i=0;i<fields.length;i++){
+    var val = ad.get(PDFName.of(fields[i]));
+    if(val){
+      if(val instanceof PDFRef){
+        try { var resolved = lib.context.lookup(val); if(resolved && !(resolved instanceof PDFStream)) a[fields[i]] = resolved.toString(); } catch(e){}
+      } else {
+        a[fields[i]] = val.toString();
+      }
+    }
+  }
+
+  /* Parse colors for display */
+  a._borderHex = extractHexColor(a);
+  a._textHex = extractTextHexColor(a);
+  a._contentsClean = cleanContents(a.Contents);
+  a._fontName = extractFontName(a.DA);
+
+  return a;
+}
+
+function extractHexColor(a){
+  /* For FreeText: border is /BC. For Square/Line: color is /C */
+  var arr = null;
+  if(a.subtype === 'FreeText' && a.BC) arr = parseNumArray(a.BC);
+  else if(a.C) arr = parseNumArray(a.C);
+  if(arr && arr.length >= 3) return rgbToHex(arr[0], arr[1], arr[2]);
+  return null;
+}
+
+function extractTextHexColor(a){
+  /* Best source: /DS hex */
+  if(a.DS){
+    var m = a.DS.match(/color:\s*#([0-9a-fA-F]{6})/);
+    if(m) return '#' + m[1].toUpperCase();
+  }
+  /* Fallback: /BC */
+  if(a.BC){
+    var arr = parseNumArray(a.BC);
+    if(arr && arr.length >= 3) return rgbToHex(arr[0], arr[1], arr[2]);
+  }
+  return null;
+}
+
+function extractFontName(da){
+  if(!da) return null;
+  var s = da;
+  if(s.charAt(0)==='(') s = s.substring(1, s.length-1);
+  var m = s.match(/\/(\S+)\s+[\d.]+\s+Tf/);
+  return m ? m[1] : null;
+}
+
+function cleanContents(c){
+  if(!c) return '';
+  var s = c;
+  if(s.charAt(0)==='(') s = s.substring(1, s.length-1);
+  /* Decode escapes */
+  var r = '';
+  for(var i=0;i<s.length;i++){
+    if(s[i]==='\\'&&i+1<s.length){
+      var n=s[i+1];
+      if(n==='r'){r+='\n';i++;}
+      else if(n==='n'){r+='\n';i++;}
+      else if(n==='\\'){r+='\\';i++;}
+      else if(n==='('){r+='(';i++;}
+      else if(n===')'){r+=')';i++;}
+      else r+=s[i];
+    } else r+=s[i];
+  }
+  return r;
+}
+
+function parseNumArray(str){
+  if(!str) return null;
+  var clean = str.replace(/[\[\]]/g,'').trim();
+  if(!clean) return null;
+  var parts = clean.split(/\s+/);
+  var nums = [];
+  for(var i=0;i<parts.length;i++){var n=parseFloat(parts[i]);if(!isNaN(n))nums.push(n);}
+  return nums.length ? nums : null;
+}
+
+function rgbToHex(r,g,b){
+  return '#' + [r,g,b].map(function(v){return Math.round(v*255).toString(16).padStart(2,'0');}).join('').toUpperCase();
+}
+
+function hexToRgb(hex){
+  hex = hex.replace('#','');
+  return [parseInt(hex.substr(0,2),16)/255, parseInt(hex.substr(2,2),16)/255, parseInt(hex.substr(4,2),16)/255];
+}
+
+/* ================================================================
+   SHOW PANELS & SUMMARY
+   ================================================================ */
+function showPanels(){
+  var counts = {};
+  var colorSet = {};
+  var fontSet = {};
+
+  for(var i=0;i<annotations.length;i++){
+    var a = annotations[i];
+    counts[a.subtype] = (counts[a.subtype]||0) + 1;
+    if(a._borderHex) colorSet[a._borderHex] = true;
+    if(a._textHex) colorSet[a._textHex] = true;
+    if(a._fontName) fontSet[a._fontName] = true;
+  }
+
+  /* Summary grid */
+  var grid = document.getElementById('summaryGrid');
+  var html = '';
+  for(var type in counts){
+    html += '<div class="summary-card"><div class="count">'+counts[type]+'</div><div class="label">'+type+'</div></div>';
+  }
+  html += '<div class="summary-card"><div class="count">'+annotations.length+'</div><div class="label">Total</div></div>';
+  grid.innerHTML = html;
+
+  /* Current colors */
+  var colorsDiv = document.getElementById('currentColors');
+  html = '';
+  var colorKeys = Object.keys(colorSet).sort();
+  for(var i=0;i<colorKeys.length;i++){
+    html += '<div class="color-chip"><span class="swatch" style="background:'+colorKeys[i]+'"></span>'+colorKeys[i]+'</div>';
+  }
+  if(Object.keys(fontSet).length > 0){
+    html += '<div class="color-chip" style="background:#e8e8e8;">Fonts: '+Object.keys(fontSet).join(', ')+'</div>';
+  }
+  colorsDiv.innerHTML = html;
+
+  /* Set initial color picker values from first annotation */
+  if(colorKeys.length > 0){
+    document.getElementById('borderColor').value = colorKeys[0];
+    document.getElementById('borderHex').textContent = colorKeys[0];
+    document.getElementById('textColor').value = colorKeys[0];
+    document.getElementById('textHex').textContent = colorKeys[0];
+  }
+
+  /* Preview list */
+  var preview = document.getElementById('annotPreview');
+  html = '';
+  for(var i=0;i<annotations.length;i++){
+    var a = annotations[i];
+    var hex = a._borderHex || '#cccccc';
+    var txt = a._contentsClean || '';
+    if(txt.length > 80) txt = txt.substring(0,80) + '...';
+    if(!txt && a.subtype === 'Square') txt = '(box)';
+    if(!txt && a.subtype === 'Line') txt = '(line)';
+    html += '<div class="preview-item"><span class="pi-swatch" style="background:'+hex+'"></span>';
+    html += '<span class="pi-type">'+a.subtype+'</span>';
+    html += '<span class="pi-text">'+escHtml(txt.replace(/\n/g,' '))+'</span></div>';
+  }
+  preview.innerHTML = html;
+
+  /* Show all panels */
+  document.getElementById('summaryPanel').classList.add('visible');
+  document.getElementById('colorPanel').classList.add('visible');
+  document.getElementById('fontPanel').classList.add('visible');
+  document.getElementById('frPanel').classList.add('visible');
+  document.getElementById('downloadPanel').classList.add('visible');
+  statusEl.style.display = 'none';
+
+  /* Wire up color pickers */
+  document.getElementById('borderColor').oninput = function(){ document.getElementById('borderHex').textContent = this.value.toUpperCase(); };
+  document.getElementById('textColor').oninput = function(){ document.getElementById('textHex').textContent = this.value.toUpperCase(); };
+
+  /* Wire up find input for live match count */
+  document.getElementById('findInput').oninput = updateMatchCount;
+}
+
+function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+/* ================================================================
+   FIND & REPLACE
+   ================================================================ */
+function updateMatchCount(){
+  var find = document.getElementById('findInput').value;
+  if(!find){ document.getElementById('frMatches').textContent = ''; return; }
+  var count = 0;
+  for(var i=0;i<annotations.length;i++){
+    var c = annotations[i]._contentsClean || '';
+    var idx = 0;
+    while(true){ idx = c.indexOf(find, idx); if(idx === -1) break; count++; idx++; }
+  }
+  document.getElementById('frMatches').textContent = count + ' match' + (count !== 1 ? 'es' : '') + ' found';
+}
+
+function doReplace(){
+  var find = document.getElementById('findInput').value;
+  var replace = document.getElementById('replaceInput').value;
+  if(!find) return;
+  var count = 0;
+  for(var i=0;i<annotations.length;i++){
+    var a = annotations[i];
+    if(!a.Contents) continue;
+    var raw = a.Contents;
+    if(raw.charAt(0)==='(') raw = raw.substring(1, raw.length-1);
+
+    /* Replace in raw PDF string (preserving escapes for other chars) */
+    /* Also need to find the text accounting for PDF escape sequences */
+    var decoded = cleanContents(a.Contents);
+    if(decoded.indexOf(find) === -1) continue;
+
+    var newDecoded = decoded.split(find).join(replace);
+    count += decoded.split(find).length - 1;
+
+    /* Re-encode for PDF string */
+    var encoded = newDecoded.replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)').replace(/\r\n/g,'\\r').replace(/\n/g,'\\r').replace(/\r/g,'\\r');
+    a.Contents = '(' + encoded + ')';
+    a._contentsClean = newDecoded;
+
+    /* Also update /RC if present */
+    if(a.RC){
+      var rc = a.RC;
+      if(rc.charAt(0)==='(') rc = rc.substring(1, rc.length-1);
+      /* Simple text replacement within XML body — find in text nodes */
+      rc = rc.split(find).join(replace);
+      a.RC = '(' + rc + ')';
+    }
+  }
+
+  document.getElementById('frMatches').textContent = count + ' replacement' + (count !== 1 ? 's' : '') + ' made';
+  showPanels(); /* refresh preview */
+}
+
+/* ================================================================
+   FONT CHANGE
+   ================================================================ */
+function setFont(fontName){
+  chosenFont = fontName;
+  document.getElementById('fontArialBtn').classList.toggle('active', fontName === 'Arial');
+  document.getElementById('fontHelvBtn').classList.toggle('active', fontName === 'Helvetica');
+  document.getElementById('fontStatus').textContent = 'Will change all fonts to ' + fontName;
+}
+
+/* ================================================================
+   GENERATE & DOWNLOAD FDF
+   ================================================================ */
+function downloadFdf(){
+  var borderHex = document.getElementById('borderColor').value;
+  var textHex = document.getElementById('textColor').value;
+  var borderRgb = hexToRgb(borderHex);
+  var textRgb = hexToRgb(textHex);
+
+  var blocks = [];
+  for(var i=0;i<annotations.length;i++){
+    var a = annotations[i];
+    var block = buildFormattedBlock(a, borderRgb, borderHex, textRgb, textHex);
+    blocks.push(block);
+  }
+
+  var fdf = '%FDF-1.2\r\n%\xe2\xe3\xcf\xd3\r\n';
+  fdf += '1 0 obj\r\n<</FDF<</Annots[';
+  fdf += blocks.join('');
+  fdf += ']>>>>\r\nendobj\r\n';
+  fdf += 'trailer\r\n<</Root 1 0 R>>\r\n%%EOF\r\n';
+
+  var blob = new Blob([fdf], {type:'application/vnd.fdf'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = pdfFileName.replace(/\.pdf$/i,'') + '_formatted.fdf';
+  a.click();
+}
+
+function buildFormattedBlock(a, borderRgb, borderHex, textRgb, textHex){
+  var sub = a.subtype;
+  var b = '<<';
+  b += '/Type/Annot';
+  b += '/Subtype/' + sub;
+  if(a.rect) b += '/Rect' + a.rect;
+  b += '/Page ' + a.page;
+
+  /* Contents — raw passthrough */
+  if(a.Contents) b += '/Contents' + a.Contents;
+
+  /* Author */
+  if(a.T) b += '/T' + a.T;
+
+  /* Subject */
+  if(a.Subj) b += '/Subj' + a.Subj;
+
+  /* NM */
+  if(a.NM) b += '/NM' + a.NM;
+
+  /* Modification date */
+  if(a.M) b += '/M' + a.M;
+
+  /* Colors — apply user's choices */
+  var bStr = borderRgb.map(function(v){return Math.round(v*1e7)/1e7;}).join(' ');
+  var tStr = textRgb.map(function(v){return Math.round(v*1e7)/1e7;}).join(' ');
+
+  if(sub === 'Square'){
+    b += '/C [' + bStr + ']';
+  } else if(sub === 'Line'){
+    b += '/C [' + bStr + ']';
+  } else if(sub === 'FreeText'){
+    b += '/C [1 1 0.988235]'; /* fill stays near-white */
+    b += '/BC [' + bStr + ']';
+  } else {
+    /* Other types: preserve original */
+    if(a.C) b += '/C' + a.C;
+    if(a.BC) b += '/BC' + a.BC;
+  }
+  if(a.IC) b += '/IC' + a.IC;
+
+  /* Border style */
+  if(a.BS) b += '/BS' + a.BS;
+  if(a.Border) b += '/Border' + a.Border;
+  if(a.RD) b += '/RD' + a.RD;
+
+  /* Font + DA — apply user's font and text color choices */
+  if(sub === 'FreeText'){
+    var fontName = chosenFont || a._fontName || 'Arial';
+    var fontSize = 10;
+    /* Extract original font size */
+    if(a.DA){
+      var fsMatch = a.DA.match(/(\d+(?:\.\d+)?)\s+Tf/);
+      if(fsMatch) fontSize = parseFloat(fsMatch[1]);
+    }
+    b += '/DA(' + tStr + ' rg /' + fontName + ' ' + fontSize + ' Tf)';
+
+    /* DS with new color */
+    b += '/DS(font: ' + fontName + ',sans-serif ' + fontSize + '.0pt; text-align:left; color:' + textHex + ')';
+
+    /* RC — update color in rich text XML */
+    if(a.RC){
+      var rc = a.RC;
+      if(rc.charAt(0)==='(') rc = rc.substring(1, rc.length-1);
+      /* Replace color in style attributes */
+      rc = rc.replace(/color:#[0-9a-fA-F]{6}/g, 'color:' + textHex);
+      /* Replace font-family */
+      if(chosenFont) rc = rc.replace(/font-family:[^;"]+/g, 'font-family:' + fontName + ',sans-serif');
+      b += '/RC(' + rc + ')';
+    }
+  } else {
+    if(a.DA) b += '/DA' + a.DA;
+    if(a.DS) b += '/DS' + a.DS;
+    if(a.RC) b += '/RC' + a.RC;
+  }
+
+  /* Line endpoints */
+  if(a.L) b += '/L' + a.L;
+  if(a.LE) b += '/LE' + a.LE;
+
+  /* Other geometry */
+  if(a.QuadPoints) b += '/QuadPoints' + a.QuadPoints;
+  if(a.Vertices) b += '/Vertices' + a.Vertices;
+  if(a.CL) b += '/CL' + a.CL;
+  if(a.InkList) b += '/InkList' + a.InkList;
+
+  /* Flags and other */
+  if(a.F) b += '/F' + a.F;
+  if(a.CA) b += '/CA' + a.CA;
+  if(a.IT) b += '/IT' + a.IT;
+  if(a.Name) b += '/Name' + a.Name;
+
+  b += '>>';
+  return b;
+}
+</script>
+</body>
+</html>
