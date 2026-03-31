@@ -276,27 +276,20 @@
 
 <!-- Color Panel -->
 <div class="panel" id="colorPanel">
-  <h2>Change Colors</h2>
+  <h2>Default Color</h2>
+  <p style="font-size:13px;color:#888;margin-bottom:12px;">Applied to annotations not assigned a date color below</p>
   <div class="color-row">
-    <label>Borders &amp; lines:</label>
-    <input type="color" id="borderColor" value="#E6194B" />
-    <span class="hex-display" id="borderHex">#E6194B</span>
-  </div>
-  <div class="color-row">
-    <label>Text color:</label>
-    <input type="color" id="textColor" value="#E6194B" />
-    <span class="hex-display" id="textHex">#E6194B</span>
+    <label>Color:</label>
+    <input type="color" id="defaultColor" value="#DB3425" />
+    <span class="hex-display" id="defaultHex">#DB3425</span>
   </div>
 </div>
 
 <!-- Date Color Panel -->
 <div class="panel" id="datePanel">
   <h2>Color by Date</h2>
-  <div class="date-toggle">
-    <input type="checkbox" id="dateToggle" onchange="toggleDateGroups()" />
-    <label for="dateToggle">Assign colors based on when annotations were added</label>
-  </div>
-  <div class="date-groups" id="dateGroups"></div>
+  <p style="font-size:13px;color:#888;margin-bottom:12px;">Check a date to assign a color. Unchecked dates use the default color above.</p>
+  <div id="dateGroups"></div>
 </div>
 
 <!-- Font Panel -->
@@ -558,10 +551,8 @@ function showPanels(){
 
   /* Set initial color picker values from first annotation */
   if(colorKeys.length > 0){
-    document.getElementById('borderColor').value = colorKeys[0];
-    document.getElementById('borderHex').textContent = colorKeys[0];
-    document.getElementById('textColor').value = colorKeys[0];
-    document.getElementById('textHex').textContent = colorKeys[0];
+    document.getElementById('defaultColor').value = colorKeys[0];
+    document.getElementById('defaultHex').textContent = colorKeys[0];
   }
 
   /* Preview list */
@@ -594,8 +585,7 @@ function showPanels(){
   statusEl.style.display = 'none';
 
   /* Wire up color pickers */
-  document.getElementById('borderColor').oninput = function(){ document.getElementById('borderHex').textContent = this.value.toUpperCase(); };
-  document.getElementById('textColor').oninput = function(){ document.getElementById('textHex').textContent = this.value.toUpperCase(); };
+  document.getElementById('defaultColor').oninput = function(){ document.getElementById('defaultHex').textContent = this.value.toUpperCase(); };
 
   /* Wire up find input for live match count */
   document.getElementById('findInput').oninput = updateMatchCount;
@@ -667,10 +657,11 @@ function setFont(fontName){
 }
 
 /* ================================================================
-   COLOR BY DATE
+   COLOR BY DATE — uses /M (modification date, what Acrobat shows)
+   Groups annotations by day. One color per day.
    ================================================================ */
-var annotColorOverrides = {}; /* { annotIndex: { borderHex:'#xxx', textHex:'#xxx' } } */
-var dateGroupMap = {};        /* { groupKey: [annotation indices] } */
+var annotColorOverrides = {};
+var dateGroupMap = {};
 var dateGroupOrder = [];
 
 function parsePdfDate(dateStr){
@@ -687,13 +678,9 @@ function getDateGroupKey(date){
   if(!date) return 'Unknown date';
   var now = new Date();
   var isToday = (date.getFullYear()===now.getFullYear() && date.getMonth()===now.getMonth() && date.getDate()===now.getDate());
-  var h = date.getHours();
-  var ampm = h >= 12 ? 'PM' : 'AM';
-  var h12 = h % 12 || 12;
-  var hourStr = h12 + ':00 ' + ampm + ' - ' + h12 + ':59 ' + ampm;
-  if(isToday) return 'Today ' + hourStr;
+  if(isToday) return 'Today';
   var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  return months[date.getMonth()] + ' ' + date.getDate() + ', ' + date.getFullYear() + ' — ' + hourStr;
+  return months[date.getMonth()] + ' ' + date.getDate() + ', ' + date.getFullYear();
 }
 
 function buildDateGroups(){
@@ -704,7 +691,9 @@ function buildDateGroups(){
   for(var i=0;i<annotations.length;i++){
     var a = annotations[i];
     if(a.subtype === 'Link' || a.subtype === 'Popup') continue;
-    var dateStr = a.CreationDate || a.M;
+    /* Use /M (modification date) as primary — this is what Acrobat displays.
+       /CreationDate can be from batch creation and is misleading. */
+    var dateStr = a.M || a.CreationDate;
     var date = parsePdfDate(dateStr);
     var key = getDateGroupKey(date);
     if(!dateGroupMap[key]){
@@ -714,13 +703,15 @@ function buildDateGroups(){
     dateGroupMap[key].push(i);
   }
 
-  /* Sort: most recent first */
+  /* Sort: today first, then most recent, unknown last */
   dateGroupOrder.sort(function(a,b){
+    if(a === 'Today') return -1;
+    if(b === 'Today') return 1;
     if(a === 'Unknown date') return 1;
     if(b === 'Unknown date') return -1;
     var idxA = dateGroupMap[a][0], idxB = dateGroupMap[b][0];
-    var da = parsePdfDate(annotations[idxA].CreationDate || annotations[idxA].M);
-    var db = parsePdfDate(annotations[idxB].CreationDate || annotations[idxB].M);
+    var da = parsePdfDate(annotations[idxA].M || annotations[idxA].CreationDate);
+    var db = parsePdfDate(annotations[idxB].M || annotations[idxB].CreationDate);
     if(!da) return 1; if(!db) return -1;
     return db.getTime() - da.getTime();
   });
@@ -732,9 +723,8 @@ function buildDateGroups(){
   for(var gi=0;gi<dateGroupOrder.length;gi++){
     var key = dateGroupOrder[gi];
     var indices = dateGroupMap[key];
-    var defaultColor = annotations[indices[0]]._borderHex || '#000000';
 
-    /* Count types in this group */
+    /* Count types */
     var typeCounts = {};
     for(var j=0;j<indices.length;j++){
       var t = annotations[indices[j]].subtype;
@@ -742,57 +732,35 @@ function buildDateGroups(){
     }
     var typeStr = Object.keys(typeCounts).map(function(t){return typeCounts[t]+' '+t;}).join(', ');
 
-    html += '<div class="date-group" data-gidx="'+gi+'">';
+    var defaultColor = annotations[indices[0]]._borderHex || '#DB3425';
+
+    html += '<div class="date-group">';
     html += '<div class="date-group-header" onclick="toggleDateGroupCheck('+gi+')">';
     html += '<input type="checkbox" id="dgcb_'+gi+'" onchange="onDateGroupCheck('+gi+', event)" onclick="event.stopPropagation()" />';
     html += '<span class="dg-label">'+escHtml(key)+'</span>';
     html += '<span class="dg-count">'+typeStr+'</span>';
     html += '</div>';
     html += '<div class="date-group-colors" id="dgc_'+gi+'">';
-
-    /* Type checkboxes */
-    html += '<div style="margin-bottom:10px;font-size:13px;">';
-    html += '<span style="color:#888;margin-right:8px;">Apply to:</span>';
-    if(typeCounts['Square'] || typeCounts['Line']){
-      html += '<label style="margin-right:12px;cursor:pointer;"><input type="checkbox" id="dgt_sq_'+gi+'" checked onchange="applyGroupColors('+gi+')" /> Boxes/Lines</label>';
-    }
-    html += '<label style="margin-right:12px;cursor:pointer;"><input type="checkbox" id="dgt_ftb_'+gi+'" checked onchange="applyGroupColors('+gi+')" /> FreeText borders</label>';
-    html += '<label style="cursor:pointer;"><input type="checkbox" id="dgt_ftt_'+gi+'" checked onchange="applyGroupColors('+gi+')" /> FreeText text</label>';
+    html += '<label>Color:</label>';
+    html += '<input type="color" id="dgcb_color_'+gi+'" value="'+defaultColor+'" oninput="onDateColorChange('+gi+')" />';
+    html += '<span class="hex-display" id="dgh_'+gi+'">'+defaultColor+'</span>';
     html += '</div>';
 
-    html += '<label>Border color:</label>';
-    html += '<input type="color" id="dgcb_border_'+gi+'" value="'+defaultColor+'" oninput="onDateColorChange('+gi+')" />';
-    html += '<span class="hex-display" id="dgb_'+gi+'">'+defaultColor+'</span>';
-    html += '<label style="margin-left:16px;">Text color:</label>';
-    html += '<input type="color" id="dgcb_text_'+gi+'" value="'+defaultColor+'" oninput="onDateColorChange('+gi+')" />';
-    html += '<span class="hex-display" id="dgt_'+gi+'">'+defaultColor+'</span>';
-    html += '</div>';
-
+    /* Annotation preview */
     html += '<div class="date-group-items">';
-    for(var j=0;j<Math.min(indices.length,8);j++){
+    for(var j=0;j<Math.min(indices.length,6);j++){
       var ann = annotations[indices[j]];
       var txt = ann._contentsClean || '';
-      if(txt.length > 60) txt = txt.substring(0,60) + '...';
+      if(txt.length > 50) txt = txt.substring(0,50) + '...';
       if(!txt) txt = '('+ann.subtype+')';
       html += '<div class="dgi">'+ann.subtype+': '+escHtml(txt.replace(/\n/g,' '))+'</div>';
     }
-    if(indices.length > 8) html += '<div class="dgi" style="color:#aaa;">...and '+(indices.length-8)+' more</div>';
+    if(indices.length > 6) html += '<div class="dgi" style="color:#aaa;">...and '+(indices.length-6)+' more</div>';
     html += '</div>';
     html += '</div>';
   }
 
   container.innerHTML = html;
-}
-
-function toggleDateGroups(){
-  var checked = document.getElementById('dateToggle').checked;
-  var groups = document.getElementById('dateGroups');
-  if(checked){
-    groups.classList.add('visible');
-  } else {
-    groups.classList.remove('visible');
-    annotColorOverrides = {};
-  }
 }
 
 function toggleDateGroupCheck(gi){
@@ -805,64 +773,28 @@ function onDateGroupCheck(gi, evt){
   if(evt) evt.stopPropagation();
   var cb = document.getElementById('dgcb_'+gi);
   var colorsDiv = document.getElementById('dgc_'+gi);
-  var key = dateGroupOrder[gi];
-  var indices = dateGroupMap[key];
-
   if(cb.checked){
     colorsDiv.classList.add('visible');
-    /* Apply current picker colors to all annotations in this group */
     applyGroupColors(gi);
   } else {
     colorsDiv.classList.remove('visible');
-    /* Remove overrides for this group */
+    var indices = dateGroupMap[dateGroupOrder[gi]];
     for(var j=0;j<indices.length;j++) delete annotColorOverrides[indices[j]];
   }
 }
 
 function onDateColorChange(gi){
   applyGroupColors(gi);
-  /* Update hex display */
-  var borderInput = document.getElementById('dgcb_border_'+gi);
-  var textInput = document.getElementById('dgcb_text_'+gi);
-  document.getElementById('dgb_'+gi).textContent = borderInput.value.toUpperCase();
-  document.getElementById('dgt_'+gi).textContent = textInput.value.toUpperCase();
+  var input = document.getElementById('dgcb_color_'+gi);
+  document.getElementById('dgh_'+gi).textContent = input.value.toUpperCase();
 }
 
 function applyGroupColors(gi){
-  var borderHex = document.getElementById('dgcb_border_'+gi).value;
-  var textHex = document.getElementById('dgcb_text_'+gi).value;
+  var colorHex = document.getElementById('dgcb_color_'+gi).value;
   var key = dateGroupOrder[gi];
   var indices = dateGroupMap[key];
-
-  var sqEl = document.getElementById('dgt_sq_'+gi);
-  var ftbEl = document.getElementById('dgt_ftb_'+gi);
-  var fttEl = document.getElementById('dgt_ftt_'+gi);
-  var applySqLn = sqEl ? sqEl.checked : false;
-  var applyFtBorder = ftbEl ? ftbEl.checked : true;
-  var applyFtText = fttEl ? fttEl.checked : true;
-
   for(var j=0;j<indices.length;j++){
-    var ai = indices[j];
-    var sub = annotations[ai].subtype;
-
-    if(sub === 'Square' || sub === 'Line'){
-      if(applySqLn){
-        annotColorOverrides[ai] = { borderHex: borderHex, textHex: borderHex, applyBorder: true, applyText: false };
-      } else {
-        delete annotColorOverrides[ai];
-      }
-    } else if(sub === 'FreeText'){
-      if(applyFtBorder || applyFtText){
-        annotColorOverrides[ai] = {
-          borderHex: applyFtBorder ? borderHex : null,
-          textHex: applyFtText ? textHex : null,
-          applyBorder: applyFtBorder,
-          applyText: applyFtText
-        };
-      } else {
-        delete annotColorOverrides[ai];
-      }
-    }
+    annotColorOverrides[indices[j]] = colorHex;
   }
 }
 
@@ -870,39 +802,23 @@ function applyGroupColors(gi){
    GENERATE & DOWNLOAD FDF
    ================================================================ */
 function downloadFdf(){
-  var globalBorderHex = document.getElementById('borderColor').value;
-  var globalTextHex = document.getElementById('textColor').value;
-  var globalBorderRgb = hexToRgb(globalBorderHex);
-  var globalTextRgb = hexToRgb(globalTextHex);
-  var useDateColors = document.getElementById('dateToggle').checked && Object.keys(annotColorOverrides).length > 0;
+  var defaultHex = document.getElementById('defaultColor').value;
+  var defaultRgb = hexToRgb(defaultHex);
 
   var blocks = [];
   for(var i=0;i<annotations.length;i++){
     var a = annotations[i];
-    /* Skip Link annotations (document hyperlinks) and Popup annotations 
-       (need parent references — Adobe recreates them automatically) */
     if(a.subtype === 'Link' || a.subtype === 'Popup') continue;
 
-    /* Determine colors: date-based override > global.
-       Overrides can be partial — only border or only text. */
-    var borderRgb = globalBorderRgb;
-    var borderHex = globalBorderHex;
-    var textRgb = globalTextRgb;
-    var textHex = globalTextHex;
-
-    if(useDateColors && annotColorOverrides[i]){
-      var ov = annotColorOverrides[i];
-      if(ov.applyBorder && ov.borderHex){
-        borderRgb = hexToRgb(ov.borderHex);
-        borderHex = ov.borderHex;
-      }
-      if(ov.applyText && ov.textHex){
-        textRgb = hexToRgb(ov.textHex);
-        textHex = ov.textHex;
-      }
+    /* Determine color: date override > default */
+    var colorHex = defaultHex;
+    var colorRgb = defaultRgb;
+    if(annotColorOverrides[i]){
+      colorHex = annotColorOverrides[i];
+      colorRgb = hexToRgb(colorHex);
     }
 
-    var block = buildFormattedBlock(a, borderRgb, borderHex, textRgb, textHex);
+    var block = buildFormattedBlock(a, colorRgb, colorHex);
     blocks.push(block);
   }
 
@@ -912,7 +828,6 @@ function downloadFdf(){
   fdf += ']>>>>\r\nendobj\r\n';
   fdf += 'trailer\r\n<</Root 1 0 R>>\r\n%%EOF\r\n';
 
-  /* Convert string to Latin-1 bytes to prevent UTF-8 corruption of binary marker */
   var bytes = new Uint8Array(fdf.length);
   for(var i = 0; i < fdf.length; i++) bytes[i] = fdf.charCodeAt(i) & 0xFF;
   var blob = new Blob([bytes], {type:'application/vnd.fdf'});
@@ -923,9 +838,6 @@ function downloadFdf(){
   a.click();
 }
 
-/* Ensure a space before values that don't start with a delimiter.
-   PDF requires whitespace between a /Name and a bare number or name value.
-   Strings (...), arrays [...], and dicts <<...>> self-delimit. */
 function safeVal(v){
   if(!v) return '';
   var first = v.charAt(0);
@@ -933,7 +845,6 @@ function safeVal(v){
   return ' ' + v;
 }
 
-/* Map internal short font names to full names for /DS */
 function fullFontName(name){
   if(!name) return 'Helvetica';
   if(name === 'Helv') return 'Helvetica';
@@ -942,7 +853,8 @@ function fullFontName(name){
   return name;
 }
 
-function buildFormattedBlock(a, borderRgb, borderHex, textRgb, textHex){
+/* Build one annotation dict. Single color for everything — borders, text, lines. */
+function buildFormattedBlock(a, colorRgb, colorHex){
   var sub = a.subtype;
   var b = '<<';
   b += '/Type/Annot';
@@ -950,48 +862,33 @@ function buildFormattedBlock(a, borderRgb, borderHex, textRgb, textHex){
   if(a.rect) b += '/Rect' + safeVal(a.rect);
   b += '/Page ' + a.page;
 
-  /* Contents — raw passthrough */
   if(a.Contents) b += '/Contents' + safeVal(a.Contents);
-
-  /* Author */
   if(a.T) b += '/T' + safeVal(a.T);
-
-  /* Subject */
   if(a.Subj) b += '/Subj' + safeVal(a.Subj);
-
-  /* NM */
   if(a.NM) b += '/NM' + safeVal(a.NM);
-
-  /* Dates */
   if(a.M) b += '/M' + safeVal(a.M);
   if(a.CreationDate) b += '/CreationDate' + safeVal(a.CreationDate);
 
-  /* Colors — apply user's choices */
-  var bStr = borderRgb.map(function(v){return Math.round(v*1e7)/1e7;}).join(' ');
-  var tStr = textRgb.map(function(v){return Math.round(v*1e7)/1e7;}).join(' ');
+  /* Color — same color for everything */
+  var cStr = colorRgb.map(function(v){return Math.round(v*1e7)/1e7;}).join(' ');
 
-  if(sub === 'Square'){
-    b += '/C[' + bStr + ']';
-  } else if(sub === 'Line'){
-    b += '/C[' + bStr + ']';
+  if(sub === 'Square' || sub === 'Line'){
+    b += '/C[' + cStr + ']';
   } else if(sub === 'FreeText'){
-    /* Preserve original /C (background fill) — don't override */
+    /* Background fill stays as original */
     if(a.C) b += '/C' + safeVal(a.C);
-    /* Always write /BC with the chosen border color */
-    b += '/BC[' + bStr + ']';
+    /* Border gets the color */
+    b += '/BC[' + cStr + ']';
   } else {
-    /* Other types: preserve original */
     if(a.C) b += '/C' + safeVal(a.C);
     if(a.BC) b += '/BC' + safeVal(a.BC);
   }
   if(a.IC) b += '/IC' + safeVal(a.IC);
 
-  /* Border style */
   if(a.BS) b += '/BS' + safeVal(a.BS);
   if(a.Border) b += '/Border' + safeVal(a.Border);
   if(a.RD) b += '/RD' + safeVal(a.RD);
 
-  /* Font + DA — apply user's font and text color choices */
   if(sub === 'FreeText'){
     var daFontName = a._fontName || 'Helv';
     var fontName = chosenFont || fullFontName(daFontName);
@@ -1000,21 +897,16 @@ function buildFormattedBlock(a, borderRgb, borderHex, textRgb, textHex){
       var fsMatch = a.DA.match(/(\d+(?:\.\d+)?)\s+Tf/);
       if(fsMatch) fontSize = parseFloat(fsMatch[1]);
     }
-    /* /DA uses the short font name (Helv, not Helvetica) */
     var daFont = (chosenFont === 'Helvetica') ? 'Helv' : (chosenFont === 'Arial' ? 'Arial' : daFontName);
-    b += '/DA(' + tStr + ' rg /' + daFont + ' ' + fontSize + ' Tf)';
+    b += '/DA(' + cStr + ' rg /' + daFont + ' ' + fontSize + ' Tf)';
 
-    /* /DS uses the full font name */
     var dsFontFull = fullFontName(chosenFont || daFontName);
-    b += '/DS(font: ' + dsFontFull + ',sans-serif ' + fontSize + '.0pt; text-align:left; color:' + textHex + ')';
+    b += '/DS(font: ' + dsFontFull + ',sans-serif ' + fontSize + '.0pt; text-align:left; color:' + colorHex + ')';
 
-    /* RC — update color in rich text XML */
     if(a.RC){
       var rc = a.RC;
       if(rc.charAt(0)==='(') rc = rc.substring(1, rc.length-1);
-      /* Replace color in style attributes */
-      rc = rc.replace(/color:#[0-9a-fA-F]{6}/g, 'color:' + textHex);
-      /* Replace font-family if user chose a font */
+      rc = rc.replace(/color:#[0-9a-fA-F]{6}/g, 'color:' + colorHex);
       if(chosenFont){
         rc = rc.replace(/font-family:[^;"]+/g, 'font-family:' + dsFontFull + ',sans-serif');
       }
@@ -1026,17 +918,12 @@ function buildFormattedBlock(a, borderRgb, borderHex, textRgb, textHex){
     if(a.RC) b += '/RC' + safeVal(a.RC);
   }
 
-  /* Line endpoints */
   if(a.L) b += '/L' + safeVal(a.L);
   if(a.LE) b += '/LE' + safeVal(a.LE);
-
-  /* Other geometry */
   if(a.QuadPoints) b += '/QuadPoints' + safeVal(a.QuadPoints);
   if(a.Vertices) b += '/Vertices' + safeVal(a.Vertices);
   if(a.CL) b += '/CL' + safeVal(a.CL);
   if(a.InkList) b += '/InkList' + safeVal(a.InkList);
-
-  /* Flags and other — these are numeric, need space */
   if(a.F) b += '/F' + safeVal(a.F);
   if(a.CA) b += '/CA' + safeVal(a.CA);
   if(a.IT) b += '/IT' + safeVal(a.IT);
@@ -1045,6 +932,7 @@ function buildFormattedBlock(a, borderRgb, borderHex, textRgb, textHex){
   b += '>>';
   return b;
 }
+
 </script>
 </body>
 </html>
