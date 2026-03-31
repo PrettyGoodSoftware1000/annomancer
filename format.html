@@ -198,6 +198,45 @@
   }
   .dl-btn:hover { background:#1e7e34; }
 
+  /* Date panel */
+  .date-toggle {
+    display:flex; align-items:center; gap:10px; margin-bottom:14px; cursor:pointer;
+  }
+  .date-toggle input[type="checkbox"] { width:18px; height:18px; cursor:pointer; }
+  .date-toggle label { font-size:14px; color:#555; cursor:pointer; }
+  .date-groups { display:none; }
+  .date-groups.visible { display:block; }
+  .date-group {
+    border:1px solid #eee; border-radius:8px; margin-bottom:10px;
+    overflow:hidden;
+  }
+  .date-group-header {
+    display:flex; align-items:center; gap:10px;
+    padding:10px 14px; background:#f8f9fa; cursor:pointer;
+    border-bottom:1px solid #eee;
+  }
+  .date-group-header input[type="checkbox"] { width:16px; height:16px; cursor:pointer; flex-shrink:0; }
+  .date-group-header .dg-label { font-size:14px; color:#333; font-weight:500; flex:1; }
+  .date-group-header .dg-count { font-size:12px; color:#888; }
+  .date-group-colors {
+    display:none; padding:10px 14px; background:#fff;
+    gap:12px;
+  }
+  .date-group-colors.visible { display:flex; flex-wrap:wrap; align-items:center; }
+  .date-group-colors label { font-size:13px; color:#666; }
+  .date-group-colors input[type="color"] {
+    width:36px; height:28px; border:2px solid #ddd; border-radius:4px;
+    cursor:pointer; padding:1px;
+  }
+  .date-group-colors .hex-display { font-size:12px; color:#999; font-family:monospace; }
+  .date-group-items {
+    max-height:120px; overflow-y:auto; padding:6px 14px;
+  }
+  .date-group-items .dgi {
+    font-size:12px; color:#888; padding:2px 0;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+
   #status {
     margin:20px auto; max-width:700px; font-size:13px; text-align:left;
     background:#fff; border-radius:8px; padding:14px;
@@ -248,6 +287,16 @@
     <input type="color" id="textColor" value="#E6194B" />
     <span class="hex-display" id="textHex">#E6194B</span>
   </div>
+</div>
+
+<!-- Date Color Panel -->
+<div class="panel" id="datePanel">
+  <h2>Color by Date</h2>
+  <div class="date-toggle">
+    <input type="checkbox" id="dateToggle" onchange="toggleDateGroups()" />
+    <label for="dateToggle">Assign colors based on when annotations were added</label>
+  </div>
+  <div class="date-groups" id="dateGroups"></div>
 </div>
 
 <!-- Font Panel -->
@@ -535,9 +584,13 @@ function showPanels(){
   /* Show all panels */
   document.getElementById('summaryPanel').classList.add('visible');
   document.getElementById('colorPanel').classList.add('visible');
+  document.getElementById('datePanel').classList.add('visible');
   document.getElementById('fontPanel').classList.add('visible');
   document.getElementById('frPanel').classList.add('visible');
   document.getElementById('downloadPanel').classList.add('visible');
+
+  /* Build date groups for the Color by Date feature */
+  buildDateGroups();
   statusEl.style.display = 'none';
 
   /* Wire up color pickers */
@@ -614,13 +667,178 @@ function setFont(fontName){
 }
 
 /* ================================================================
+   COLOR BY DATE
+   ================================================================ */
+var dateGroupColors = {}; /* { groupKey: { borderHex:'#xxx', textHex:'#xxx' } } */
+var dateGroupMap = {};    /* { groupKey: [annotation indices] } */
+
+function parsePdfDate(dateStr){
+  if(!dateStr) return null;
+  var s = dateStr;
+  if(s.charAt(0)==='(') s = s.substring(1, s.length-1);
+  /* Format: D:YYYYMMDDHHmmSS+TZ or D:YYYYMMDDHHmmSS-TZ'mm' */
+  var m = s.match(/D:(\d{4})(\d{2})(\d{2})(\d{2})?(\d{2})?(\d{2})?/);
+  if(!m) return null;
+  var year = parseInt(m[1]);
+  var month = parseInt(m[2]) - 1;
+  var day = parseInt(m[3]);
+  var hour = m[4] ? parseInt(m[4]) : 0;
+  var min = m[5] ? parseInt(m[5]) : 0;
+  var sec = m[6] ? parseInt(m[6]) : 0;
+  return new Date(year, month, day, hour, min, sec);
+}
+
+function getDateGroupKey(date){
+  if(!date) return 'Unknown date';
+  var now = new Date();
+  var isToday = (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate());
+  if(isToday){
+    var h = date.getHours();
+    var ampm = h >= 12 ? 'PM' : 'AM';
+    var h12 = h % 12 || 12;
+    return 'Today ' + h12 + ':00 ' + ampm + ' - ' + h12 + ':59 ' + ampm;
+  }
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return months[date.getMonth()] + ' ' + date.getDate() + ', ' + date.getFullYear();
+}
+
+function buildDateGroups(){
+  dateGroupMap = {};
+  var groupOrder = [];
+
+  for(var i=0;i<annotations.length;i++){
+    var a = annotations[i];
+    if(a.subtype === 'Link' || a.subtype === 'Popup') continue;
+    var dateStr = a.CreationDate || a.M;
+    var date = parsePdfDate(dateStr);
+    var key = getDateGroupKey(date);
+    if(!dateGroupMap[key]){
+      dateGroupMap[key] = [];
+      groupOrder.push(key);
+    }
+    dateGroupMap[key].push(i);
+  }
+
+  /* Sort groups: most recent first, "Unknown date" last */
+  groupOrder.sort(function(a,b){
+    if(a === 'Unknown date') return 1;
+    if(b === 'Unknown date') return -1;
+    /* Parse back to compare dates */
+    var da = dateGroupMap[a][0] !== undefined ? parsePdfDate(annotations[dateGroupMap[a][0]].CreationDate || annotations[dateGroupMap[a][0]].M) : null;
+    var db = dateGroupMap[b][0] !== undefined ? parsePdfDate(annotations[dateGroupMap[b][0]].CreationDate || annotations[dateGroupMap[b][0]].M) : null;
+    if(!da) return 1;
+    if(!db) return -1;
+    return db.getTime() - da.getTime();
+  });
+
+  /* Build HTML */
+  var container = document.getElementById('dateGroups');
+  var html = '';
+
+  for(var gi=0;gi<groupOrder.length;gi++){
+    var key = groupOrder[gi];
+    var indices = dateGroupMap[key];
+    var safeKey = key.replace(/'/g, "\\'");
+    var defaultColor = annotations[indices[0]]._borderHex || '#000000';
+
+    html += '<div class="date-group">';
+    html += '<div class="date-group-header" onclick="toggleDateGroupCheck(this)">';
+    html += '<input type="checkbox" data-group="'+escHtml(key)+'" onchange="onDateGroupCheck(this, event)" onclick="event.stopPropagation()" />';
+    html += '<span class="dg-label">'+escHtml(key)+'</span>';
+    html += '<span class="dg-count">'+indices.length+' annotation'+(indices.length!==1?'s':'')+'</span>';
+    html += '</div>';
+    html += '<div class="date-group-colors" id="dgc_'+gi+'">';
+    html += '<label>Borders:</label>';
+    html += '<input type="color" data-group="'+escHtml(key)+'" data-field="border" value="'+defaultColor+'" oninput="onDateColorChange(this)" />';
+    html += '<span class="hex-display" id="dgb_'+gi+'">'+defaultColor+'</span>';
+    html += '<label style="margin-left:16px;">Text:</label>';
+    html += '<input type="color" data-group="'+escHtml(key)+'" data-field="text" value="'+defaultColor+'" oninput="onDateColorChange(this)" />';
+    html += '<span class="hex-display" id="dgt_'+gi+'">'+defaultColor+'</span>';
+    html += '</div>';
+
+    /* Show annotation items in this group */
+    html += '<div class="date-group-items">';
+    for(var j=0;j<Math.min(indices.length,8);j++){
+      var ann = annotations[indices[j]];
+      var txt = ann._contentsClean || '';
+      if(txt.length > 60) txt = txt.substring(0,60) + '...';
+      if(!txt) txt = '('+ann.subtype+')';
+      html += '<div class="dgi">'+ann.subtype+': '+escHtml(txt.replace(/\n/g,' '))+'</div>';
+    }
+    if(indices.length > 8) html += '<div class="dgi" style="color:#aaa;">...and '+(indices.length-8)+' more</div>';
+    html += '</div>';
+    html += '</div>';
+  }
+
+  container.innerHTML = html;
+}
+
+function toggleDateGroups(){
+  var checked = document.getElementById('dateToggle').checked;
+  var groups = document.getElementById('dateGroups');
+  if(checked){
+    groups.classList.add('visible');
+  } else {
+    groups.classList.remove('visible');
+    dateGroupColors = {};
+  }
+}
+
+function toggleDateGroupCheck(headerEl){
+  var cb = headerEl.querySelector('input[type="checkbox"]');
+  cb.checked = !cb.checked;
+  onDateGroupCheck(cb, null);
+}
+
+function onDateGroupCheck(cb, evt){
+  if(evt) evt.stopPropagation();
+  var group = cb.getAttribute('data-group');
+  var colorsDiv = cb.closest('.date-group').querySelector('.date-group-colors');
+  if(cb.checked){
+    colorsDiv.classList.add('visible');
+    /* Initialize color for this group */
+    var borderInput = colorsDiv.querySelector('input[data-field="border"]');
+    var textInput = colorsDiv.querySelector('input[data-field="text"]');
+    dateGroupColors[group] = {
+      borderHex: borderInput.value,
+      textHex: textInput.value
+    };
+  } else {
+    colorsDiv.classList.remove('visible');
+    delete dateGroupColors[group];
+  }
+}
+
+function onDateColorChange(input){
+  var group = input.getAttribute('data-group');
+  var field = input.getAttribute('data-field');
+  if(!dateGroupColors[group]) dateGroupColors[group] = {borderHex:'#000000', textHex:'#000000'};
+  if(field === 'border') dateGroupColors[group].borderHex = input.value;
+  else dateGroupColors[group].textHex = input.value;
+  /* Update hex display */
+  var hexSpan = input.nextElementSibling;
+  if(hexSpan) hexSpan.textContent = input.value.toUpperCase();
+}
+
+/* Get the date-based color for an annotation index, or null if not assigned */
+function getDateColor(annotIdx){
+  for(var key in dateGroupColors){
+    if(dateGroupMap[key] && dateGroupMap[key].indexOf(annotIdx) >= 0){
+      return dateGroupColors[key];
+    }
+  }
+  return null;
+}
+
+/* ================================================================
    GENERATE & DOWNLOAD FDF
    ================================================================ */
 function downloadFdf(){
-  var borderHex = document.getElementById('borderColor').value;
-  var textHex = document.getElementById('textColor').value;
-  var borderRgb = hexToRgb(borderHex);
-  var textRgb = hexToRgb(textHex);
+  var globalBorderHex = document.getElementById('borderColor').value;
+  var globalTextHex = document.getElementById('textColor').value;
+  var globalBorderRgb = hexToRgb(globalBorderHex);
+  var globalTextRgb = hexToRgb(globalTextHex);
+  var useDateColors = document.getElementById('dateToggle').checked && Object.keys(dateGroupColors).length > 0;
 
   var blocks = [];
   for(var i=0;i<annotations.length;i++){
@@ -628,6 +846,23 @@ function downloadFdf(){
     /* Skip Link annotations (document hyperlinks) and Popup annotations 
        (need parent references — Adobe recreates them automatically) */
     if(a.subtype === 'Link' || a.subtype === 'Popup') continue;
+
+    /* Determine colors: date-based override > global */
+    var borderRgb = globalBorderRgb;
+    var borderHex = globalBorderHex;
+    var textRgb = globalTextRgb;
+    var textHex = globalTextHex;
+
+    if(useDateColors){
+      var dc = getDateColor(i);
+      if(dc){
+        borderRgb = hexToRgb(dc.borderHex);
+        borderHex = dc.borderHex;
+        textRgb = hexToRgb(dc.textHex);
+        textHex = dc.textHex;
+      }
+    }
+
     var block = buildFormattedBlock(a, borderRgb, borderHex, textRgb, textHex);
     blocks.push(block);
   }
