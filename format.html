@@ -687,14 +687,13 @@ function getDateGroupKey(date){
   if(!date) return 'Unknown date';
   var now = new Date();
   var isToday = (date.getFullYear()===now.getFullYear() && date.getMonth()===now.getMonth() && date.getDate()===now.getDate());
-  if(isToday){
-    var h = date.getHours();
-    var ampm = h >= 12 ? 'PM' : 'AM';
-    var h12 = h % 12 || 12;
-    return 'Today ' + h12 + ':00 ' + ampm + ' - ' + h12 + ':59 ' + ampm;
-  }
+  var h = date.getHours();
+  var ampm = h >= 12 ? 'PM' : 'AM';
+  var h12 = h % 12 || 12;
+  var hourStr = h12 + ':00 ' + ampm + ' - ' + h12 + ':59 ' + ampm;
+  if(isToday) return 'Today ' + hourStr;
   var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  return months[date.getMonth()] + ' ' + date.getDate() + ', ' + date.getFullYear();
+  return months[date.getMonth()] + ' ' + date.getDate() + ', ' + date.getFullYear() + ' — ' + hourStr;
 }
 
 function buildDateGroups(){
@@ -735,17 +734,36 @@ function buildDateGroups(){
     var indices = dateGroupMap[key];
     var defaultColor = annotations[indices[0]]._borderHex || '#000000';
 
+    /* Count types in this group */
+    var typeCounts = {};
+    for(var j=0;j<indices.length;j++){
+      var t = annotations[indices[j]].subtype;
+      typeCounts[t] = (typeCounts[t]||0) + 1;
+    }
+    var typeStr = Object.keys(typeCounts).map(function(t){return typeCounts[t]+' '+t;}).join(', ');
+
     html += '<div class="date-group" data-gidx="'+gi+'">';
     html += '<div class="date-group-header" onclick="toggleDateGroupCheck('+gi+')">';
     html += '<input type="checkbox" id="dgcb_'+gi+'" onchange="onDateGroupCheck('+gi+', event)" onclick="event.stopPropagation()" />';
     html += '<span class="dg-label">'+escHtml(key)+'</span>';
-    html += '<span class="dg-count">'+indices.length+' annotation'+(indices.length!==1?'s':'')+'</span>';
+    html += '<span class="dg-count">'+typeStr+'</span>';
     html += '</div>';
     html += '<div class="date-group-colors" id="dgc_'+gi+'">';
-    html += '<label>Borders:</label>';
+
+    /* Type checkboxes */
+    html += '<div style="margin-bottom:10px;font-size:13px;">';
+    html += '<span style="color:#888;margin-right:8px;">Apply to:</span>';
+    if(typeCounts['Square'] || typeCounts['Line']){
+      html += '<label style="margin-right:12px;cursor:pointer;"><input type="checkbox" id="dgt_sq_'+gi+'" checked onchange="applyGroupColors('+gi+')" /> Boxes/Lines</label>';
+    }
+    html += '<label style="margin-right:12px;cursor:pointer;"><input type="checkbox" id="dgt_ftb_'+gi+'" checked onchange="applyGroupColors('+gi+')" /> FreeText borders</label>';
+    html += '<label style="cursor:pointer;"><input type="checkbox" id="dgt_ftt_'+gi+'" checked onchange="applyGroupColors('+gi+')" /> FreeText text</label>';
+    html += '</div>';
+
+    html += '<label>Border color:</label>';
     html += '<input type="color" id="dgcb_border_'+gi+'" value="'+defaultColor+'" oninput="onDateColorChange('+gi+')" />';
     html += '<span class="hex-display" id="dgb_'+gi+'">'+defaultColor+'</span>';
-    html += '<label style="margin-left:16px;">Text:</label>';
+    html += '<label style="margin-left:16px;">Text color:</label>';
     html += '<input type="color" id="dgcb_text_'+gi+'" value="'+defaultColor+'" oninput="onDateColorChange('+gi+')" />';
     html += '<span class="hex-display" id="dgt_'+gi+'">'+defaultColor+'</span>';
     html += '</div>';
@@ -815,8 +833,36 @@ function applyGroupColors(gi){
   var textHex = document.getElementById('dgcb_text_'+gi).value;
   var key = dateGroupOrder[gi];
   var indices = dateGroupMap[key];
+
+  var sqEl = document.getElementById('dgt_sq_'+gi);
+  var ftbEl = document.getElementById('dgt_ftb_'+gi);
+  var fttEl = document.getElementById('dgt_ftt_'+gi);
+  var applySqLn = sqEl ? sqEl.checked : false;
+  var applyFtBorder = ftbEl ? ftbEl.checked : true;
+  var applyFtText = fttEl ? fttEl.checked : true;
+
   for(var j=0;j<indices.length;j++){
-    annotColorOverrides[indices[j]] = { borderHex: borderHex, textHex: textHex };
+    var ai = indices[j];
+    var sub = annotations[ai].subtype;
+
+    if(sub === 'Square' || sub === 'Line'){
+      if(applySqLn){
+        annotColorOverrides[ai] = { borderHex: borderHex, textHex: borderHex, applyBorder: true, applyText: false };
+      } else {
+        delete annotColorOverrides[ai];
+      }
+    } else if(sub === 'FreeText'){
+      if(applyFtBorder || applyFtText){
+        annotColorOverrides[ai] = {
+          borderHex: applyFtBorder ? borderHex : null,
+          textHex: applyFtText ? textHex : null,
+          applyBorder: applyFtBorder,
+          applyText: applyFtText
+        };
+      } else {
+        delete annotColorOverrides[ai];
+      }
+    }
   }
 }
 
@@ -837,17 +883,23 @@ function downloadFdf(){
        (need parent references — Adobe recreates them automatically) */
     if(a.subtype === 'Link' || a.subtype === 'Popup') continue;
 
-    /* Determine colors: date-based override > global */
+    /* Determine colors: date-based override > global.
+       Overrides can be partial — only border or only text. */
     var borderRgb = globalBorderRgb;
     var borderHex = globalBorderHex;
     var textRgb = globalTextRgb;
     var textHex = globalTextHex;
 
     if(useDateColors && annotColorOverrides[i]){
-      borderRgb = hexToRgb(annotColorOverrides[i].borderHex);
-      borderHex = annotColorOverrides[i].borderHex;
-      textRgb = hexToRgb(annotColorOverrides[i].textHex);
-      textHex = annotColorOverrides[i].textHex;
+      var ov = annotColorOverrides[i];
+      if(ov.applyBorder && ov.borderHex){
+        borderRgb = hexToRgb(ov.borderHex);
+        borderHex = ov.borderHex;
+      }
+      if(ov.applyText && ov.textHex){
+        textRgb = hexToRgb(ov.textHex);
+        textHex = ov.textHex;
+      }
     }
 
     var block = buildFormattedBlock(a, borderRgb, borderHex, textRgb, textHex);
