@@ -478,6 +478,7 @@ function showPanels(){
 
   for(var i=0;i<annotations.length;i++){
     var a = annotations[i];
+    if(a.subtype === 'Link' || a.subtype === 'Popup') continue;
     counts[a.subtype] = (counts[a.subtype]||0) + 1;
     if(a._borderHex) colorSet[a._borderHex] = true;
     if(a._textHex) colorSet[a._textHex] = true;
@@ -490,7 +491,8 @@ function showPanels(){
   for(var type in counts){
     html += '<div class="summary-card"><div class="count">'+counts[type]+'</div><div class="label">'+type+'</div></div>';
   }
-  html += '<div class="summary-card"><div class="count">'+annotations.length+'</div><div class="label">Total</div></div>';
+  var totalFiltered = 0; for(var t in counts) totalFiltered += counts[t];
+  html += '<div class="summary-card"><div class="count">'+totalFiltered+'</div><div class="label">Total</div></div>';
   grid.innerHTML = html;
 
   /* Current colors */
@@ -518,6 +520,7 @@ function showPanels(){
   html = '';
   for(var i=0;i<annotations.length;i++){
     var a = annotations[i];
+    if(a.subtype === 'Link' || a.subtype === 'Popup') continue;
     var hex = a._borderHex || '#cccccc';
     var txt = a._contentsClean || '';
     if(txt.length > 80) txt = txt.substring(0,80) + '...';
@@ -622,6 +625,9 @@ function downloadFdf(){
   var blocks = [];
   for(var i=0;i<annotations.length;i++){
     var a = annotations[i];
+    /* Skip Link annotations (document hyperlinks) and Popup annotations 
+       (need parent references — Adobe recreates them automatically) */
+    if(a.subtype === 'Link' || a.subtype === 'Popup') continue;
     var block = buildFormattedBlock(a, borderRgb, borderHex, textRgb, textHex);
     blocks.push(block);
   }
@@ -643,65 +649,90 @@ function downloadFdf(){
   a.click();
 }
 
+/* Ensure a space before values that don't start with a delimiter.
+   PDF requires whitespace between a /Name and a bare number or name value.
+   Strings (...), arrays [...], and dicts <<...>> self-delimit. */
+function safeVal(v){
+  if(!v) return '';
+  var first = v.charAt(0);
+  if(first === '(' || first === '[' || first === '<' || first === '/') return v;
+  return ' ' + v;
+}
+
+/* Map internal short font names to full names for /DS */
+function fullFontName(name){
+  if(!name) return 'Helvetica';
+  if(name === 'Helv') return 'Helvetica';
+  if(name === 'HeBo') return 'Helvetica-Bold';
+  if(name === 'HeIt') return 'Helvetica-Oblique';
+  return name;
+}
+
 function buildFormattedBlock(a, borderRgb, borderHex, textRgb, textHex){
   var sub = a.subtype;
   var b = '<<';
   b += '/Type/Annot';
   b += '/Subtype/' + sub;
-  if(a.rect) b += '/Rect' + a.rect;
+  if(a.rect) b += '/Rect' + safeVal(a.rect);
   b += '/Page ' + a.page;
 
   /* Contents — raw passthrough */
-  if(a.Contents) b += '/Contents' + a.Contents;
+  if(a.Contents) b += '/Contents' + safeVal(a.Contents);
 
   /* Author */
-  if(a.T) b += '/T' + a.T;
+  if(a.T) b += '/T' + safeVal(a.T);
 
   /* Subject */
-  if(a.Subj) b += '/Subj' + a.Subj;
+  if(a.Subj) b += '/Subj' + safeVal(a.Subj);
 
   /* NM */
-  if(a.NM) b += '/NM' + a.NM;
+  if(a.NM) b += '/NM' + safeVal(a.NM);
 
-  /* Modification date */
-  if(a.M) b += '/M' + a.M;
+  /* Dates */
+  if(a.M) b += '/M' + safeVal(a.M);
+  if(a.CreationDate) b += '/CreationDate' + safeVal(a.CreationDate);
 
   /* Colors — apply user's choices */
   var bStr = borderRgb.map(function(v){return Math.round(v*1e7)/1e7;}).join(' ');
   var tStr = textRgb.map(function(v){return Math.round(v*1e7)/1e7;}).join(' ');
 
   if(sub === 'Square'){
-    b += '/C [' + bStr + ']';
+    b += '/C[' + bStr + ']';
   } else if(sub === 'Line'){
-    b += '/C [' + bStr + ']';
+    b += '/C[' + bStr + ']';
   } else if(sub === 'FreeText'){
-    b += '/C [1 1 0.988235]'; /* fill stays near-white */
-    b += '/BC [' + bStr + ']';
+    /* Preserve original /C (background fill) — don't override */
+    if(a.C) b += '/C' + safeVal(a.C);
+    /* Don't add /BC if original didn't have it */
+    if(a.BC) b += '/BC' + safeVal(a.BC);
   } else {
     /* Other types: preserve original */
-    if(a.C) b += '/C' + a.C;
-    if(a.BC) b += '/BC' + a.BC;
+    if(a.C) b += '/C' + safeVal(a.C);
+    if(a.BC) b += '/BC' + safeVal(a.BC);
   }
-  if(a.IC) b += '/IC' + a.IC;
+  if(a.IC) b += '/IC' + safeVal(a.IC);
 
   /* Border style */
-  if(a.BS) b += '/BS' + a.BS;
-  if(a.Border) b += '/Border' + a.Border;
-  if(a.RD) b += '/RD' + a.RD;
+  if(a.BS) b += '/BS' + safeVal(a.BS);
+  if(a.Border) b += '/Border' + safeVal(a.Border);
+  if(a.RD) b += '/RD' + safeVal(a.RD);
 
   /* Font + DA — apply user's font and text color choices */
   if(sub === 'FreeText'){
-    var fontName = chosenFont || a._fontName || 'Arial';
+    var daFontName = a._fontName || 'Helv';
+    var fontName = chosenFont || fullFontName(daFontName);
     var fontSize = 10;
-    /* Extract original font size */
     if(a.DA){
       var fsMatch = a.DA.match(/(\d+(?:\.\d+)?)\s+Tf/);
       if(fsMatch) fontSize = parseFloat(fsMatch[1]);
     }
-    b += '/DA(' + tStr + ' rg /' + fontName + ' ' + fontSize + ' Tf)';
+    /* /DA uses the short font name (Helv, not Helvetica) */
+    var daFont = (chosenFont === 'Helvetica') ? 'Helv' : (chosenFont === 'Arial' ? 'Arial' : daFontName);
+    b += '/DA(' + tStr + ' rg /' + daFont + ' ' + fontSize + ' Tf)';
 
-    /* DS with new color */
-    b += '/DS(font: ' + fontName + ',sans-serif ' + fontSize + '.0pt; text-align:left; color:' + textHex + ')';
+    /* /DS uses the full font name */
+    var dsFontFull = fullFontName(chosenFont || daFontName);
+    b += '/DS(font: ' + dsFontFull + ',sans-serif ' + fontSize + '.0pt; text-align:left; color:' + textHex + ')';
 
     /* RC — update color in rich text XML */
     if(a.RC){
@@ -709,31 +740,33 @@ function buildFormattedBlock(a, borderRgb, borderHex, textRgb, textHex){
       if(rc.charAt(0)==='(') rc = rc.substring(1, rc.length-1);
       /* Replace color in style attributes */
       rc = rc.replace(/color:#[0-9a-fA-F]{6}/g, 'color:' + textHex);
-      /* Replace font-family */
-      if(chosenFont) rc = rc.replace(/font-family:[^;"]+/g, 'font-family:' + fontName + ',sans-serif');
+      /* Replace font-family if user chose a font */
+      if(chosenFont){
+        rc = rc.replace(/font-family:[^;"]+/g, 'font-family:' + dsFontFull + ',sans-serif');
+      }
       b += '/RC(' + rc + ')';
     }
   } else {
-    if(a.DA) b += '/DA' + a.DA;
-    if(a.DS) b += '/DS' + a.DS;
-    if(a.RC) b += '/RC' + a.RC;
+    if(a.DA) b += '/DA' + safeVal(a.DA);
+    if(a.DS) b += '/DS' + safeVal(a.DS);
+    if(a.RC) b += '/RC' + safeVal(a.RC);
   }
 
   /* Line endpoints */
-  if(a.L) b += '/L' + a.L;
-  if(a.LE) b += '/LE' + a.LE;
+  if(a.L) b += '/L' + safeVal(a.L);
+  if(a.LE) b += '/LE' + safeVal(a.LE);
 
   /* Other geometry */
-  if(a.QuadPoints) b += '/QuadPoints' + a.QuadPoints;
-  if(a.Vertices) b += '/Vertices' + a.Vertices;
-  if(a.CL) b += '/CL' + a.CL;
-  if(a.InkList) b += '/InkList' + a.InkList;
+  if(a.QuadPoints) b += '/QuadPoints' + safeVal(a.QuadPoints);
+  if(a.Vertices) b += '/Vertices' + safeVal(a.Vertices);
+  if(a.CL) b += '/CL' + safeVal(a.CL);
+  if(a.InkList) b += '/InkList' + safeVal(a.InkList);
 
-  /* Flags and other */
-  if(a.F) b += '/F' + a.F;
-  if(a.CA) b += '/CA' + a.CA;
-  if(a.IT) b += '/IT' + a.IT;
-  if(a.Name) b += '/Name' + a.Name;
+  /* Flags and other — these are numeric, need space */
+  if(a.F) b += '/F' + safeVal(a.F);
+  if(a.CA) b += '/CA' + safeVal(a.CA);
+  if(a.IT) b += '/IT' + safeVal(a.IT);
+  if(a.Name) b += '/Name' + safeVal(a.Name);
 
   b += '>>';
   return b;
