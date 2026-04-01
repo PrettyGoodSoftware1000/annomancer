@@ -1,5 +1,3 @@
-/* this code 99% works */
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -442,6 +440,29 @@ async function loadPdf(file){
   }
 }
 
+/* Strip PDF string line continuations: \<CR>, \<LF>, \<CRLF>.
+   These are a PDF formatting device that breaks long strings across lines.
+   pdf-lib's .toString() preserves them as raw bytes, but they carry no
+   meaning and cause bugs when text replacements shift content positions. */
+function stripLineContinuations(s){
+  var result = '';
+  for(var i = 0; i < s.length; i++){
+    if(s.charCodeAt(i) === 0x5C && i+1 < s.length){
+      var next = s.charCodeAt(i+1);
+      if(next === 0x5C){ /* \\ escaped backslash — keep both, skip past */
+        result += s[i]; result += s[i+1]; i++; continue;
+      }
+      if(next === 0x0D){ /* \<CR> or \<CRLF> */
+        i++; if(i+1 < s.length && s.charCodeAt(i+1) === 0x0A) i++;
+        continue;
+      }
+      if(next === 0x0A){ i++; continue; } /* \<LF> */
+    }
+    result += s[i];
+  }
+  return result;
+}
+
 function extractAnnot(ad, pageIdx, lib){
   var st = ad.get(PDFName.of('Subtype'));
   if(!st) return null;
@@ -451,7 +472,7 @@ function extractAnnot(ad, pageIdx, lib){
   var a = { subtype:subtype, page:pageIdx };
   if(rect) a.rect = rect.toString();
 
-  /* Read all fields as raw strings */
+  /* Read all fields as raw strings, stripping PDF line continuations */
   var fields = ['Contents','T','Subj','DA','DS','NM','M','RC','CreationDate',
     'C','BC','IC','L','RD','Border','QuadPoints','Vertices','LE','CL',
     'BS','MK','CA','F','Ff','Q','LL','LLE','IT','Name','InkList'];
@@ -459,9 +480,9 @@ function extractAnnot(ad, pageIdx, lib){
     var val = ad.get(PDFName.of(fields[i]));
     if(val){
       if(val instanceof PDFRef){
-        try { var resolved = lib.context.lookup(val); if(resolved && !(resolved instanceof PDFStream)) a[fields[i]] = resolved.toString(); } catch(e){}
+        try { var resolved = lib.context.lookup(val); if(resolved && !(resolved instanceof PDFStream)) a[fields[i]] = stripLineContinuations(resolved.toString()); } catch(e){}
       } else {
-        a[fields[i]] = val.toString();
+        a[fields[i]] = stripLineContinuations(val.toString());
       }
     }
   }
