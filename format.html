@@ -165,6 +165,30 @@
   .fr-btn:hover { background:#005fd1; }
   .fr-matches { font-size:13px; color:#888; margin-bottom:12px; }
 
+  /* Replacement rules stack */
+  .rule-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: #f0f7ff;
+    border: 1px solid #d0e3f7;
+    border-radius: 6px;
+    margin-bottom: 6px;
+    font-size: 13px;
+  }
+  .rule-item .rule-text { flex:1; color:#333; }
+  .rule-item .rule-find { font-weight:600; color:#c62828; }
+  .rule-item .rule-replace { font-weight:600; color:#2e7d32; }
+  .rule-item .rule-arrow { color:#888; margin:0 2px; }
+  .rule-item .rule-x {
+    width:22px; height:22px; line-height:22px; text-align:center;
+    background:#e0e0e0; color:#666; border-radius:50%; cursor:pointer;
+    font-size:14px; font-weight:700; border:none; flex-shrink:0;
+    transition: background 0.15s;
+  }
+  .rule-item .rule-x:hover { background:#c62828; color:#fff; }
+
   /* Preview list */
   .preview-list {
     max-height: 300px;
@@ -274,8 +298,16 @@
   <div class="preview-list" id="annotPreview"></div>
 </div>
 
-<!-- Color Panel -->
-<div class="panel" id="colorPanel">
+<!-- Color Toggle -->
+<div class="panel" id="colorTogglePanel">
+  <div class="date-toggle">
+    <input type="checkbox" id="colorToggle" onchange="toggleColorPanels()" />
+    <label for="colorToggle">I want to change some colors.</label>
+  </div>
+</div>
+
+<!-- Color Panel (hidden until toggle checked) -->
+<div class="panel" id="colorPanel" style="display:none;">
   <h2>Default Color</h2>
   <p style="font-size:13px;color:#888;margin-bottom:12px;">Applied to annotations not assigned a date color below</p>
   <div class="color-row">
@@ -285,8 +317,8 @@
   </div>
 </div>
 
-<!-- Date Color Panel -->
-<div class="panel" id="datePanel">
+<!-- Date Color Panel (hidden until toggle checked) -->
+<div class="panel" id="datePanel" style="display:none;">
   <h2>Color by Date</h2>
   <p style="font-size:13px;color:#888;margin-bottom:12px;">Check a date to assign a color. Unchecked dates use the default color above.</p>
   <div id="dateGroups"></div>
@@ -308,9 +340,10 @@
   </div>
   <div class="fr-row">
     <input type="text" id="replaceInput" placeholder="Replace with..." />
-    <button class="fr-btn" onclick="doReplace()">Replace All</button>
+    <button class="fr-btn" onclick="addReplacement()">Replace All</button>
   </div>
   <div class="fr-matches" id="frMatches"></div>
+  <div id="replacementStack"></div>
 </div>
 
 <!-- Download -->
@@ -574,8 +607,7 @@ function showPanels(){
 
   /* Show all panels */
   document.getElementById('summaryPanel').classList.add('visible');
-  document.getElementById('colorPanel').classList.add('visible');
-  document.getElementById('datePanel').classList.add('visible');
+  document.getElementById('colorTogglePanel').classList.add('visible');
   document.getElementById('fontPanel').classList.add('visible');
   document.getElementById('frPanel').classList.add('visible');
   document.getElementById('downloadPanel').classList.add('visible');
@@ -594,8 +626,19 @@ function showPanels(){
 function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 /* ================================================================
-   FIND & REPLACE
+   COLOR TOGGLE
    ================================================================ */
+function toggleColorPanels(){
+  var checked = document.getElementById('colorToggle').checked;
+  document.getElementById('colorPanel').style.display = checked ? 'block' : 'none';
+  document.getElementById('datePanel').style.display = checked ? 'block' : 'none';
+}
+
+/* ================================================================
+   FIND & REPLACE — stacking rules with simultaneous application
+   ================================================================ */
+var replacementRules = []; /* [{find:'...', replace:'...'}] */
+
 function updateMatchCount(){
   var find = document.getElementById('findInput').value;
   if(!find){ document.getElementById('frMatches').textContent = ''; return; }
@@ -605,45 +648,68 @@ function updateMatchCount(){
     var idx = 0;
     while(true){ idx = c.indexOf(find, idx); if(idx === -1) break; count++; idx++; }
   }
-  document.getElementById('frMatches').textContent = count + ' match' + (count !== 1 ? 'es' : '') + ' found';
+  document.getElementById('frMatches').textContent = count + ' match' + (count !== 1 ? 'es' : '') + ' in original text';
 }
 
-function doReplace(){
+function addReplacement(){
   var find = document.getElementById('findInput').value;
   var replace = document.getElementById('replaceInput').value;
   if(!find) return;
-  var count = 0;
-  for(var i=0;i<annotations.length;i++){
-    var a = annotations[i];
-    if(!a.Contents) continue;
-    var raw = a.Contents;
-    if(raw.charAt(0)==='(') raw = raw.substring(1, raw.length-1);
+  replacementRules.push({find: find, replace: replace});
+  document.getElementById('findInput').value = '';
+  document.getElementById('replaceInput').value = '';
+  document.getElementById('frMatches').textContent = '';
+  renderRuleStack();
+}
 
-    /* Replace in raw PDF string (preserving escapes for other chars) */
-    /* Also need to find the text accounting for PDF escape sequences */
-    var decoded = cleanContents(a.Contents);
-    if(decoded.indexOf(find) === -1) continue;
+function cancelRule(index){
+  replacementRules.splice(index, 1);
+  renderRuleStack();
+}
 
-    var newDecoded = decoded.split(find).join(replace);
-    count += decoded.split(find).length - 1;
+function renderRuleStack(){
+  var container = document.getElementById('replacementStack');
+  var html = '';
+  for(var i = 0; i < replacementRules.length; i++){
+    var r = replacementRules[i];
+    html += '<div class="rule-item">';
+    html += '<span class="rule-text"><span class="rule-find">' + escHtml(r.find) + '</span>';
+    html += ' <span class="rule-arrow">will be replaced with</span> ';
+    html += '<span class="rule-replace">' + escHtml(r.replace) + '</span></span>';
+    html += '<button class="rule-x" onclick="cancelRule('+i+')">&times;</button>';
+    html += '</div>';
+  }
+  container.innerHTML = html;
+}
 
-    /* Re-encode for PDF string */
-    var encoded = newDecoded.replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)').replace(/\r\n/g,'\\r').replace(/\n/g,'\\r').replace(/\r/g,'\\r');
-    a.Contents = '(' + encoded + ')';
-    a._contentsClean = newDecoded;
-
-    /* Also update /RC if present */
-    if(a.RC){
-      var rc = a.RC;
-      if(rc.charAt(0)==='(') rc = rc.substring(1, rc.length-1);
-      /* Simple text replacement within XML body — find in text nodes */
-      rc = rc.split(find).join(replace);
-      a.RC = '(' + rc + ')';
+/* Apply all replacement rules simultaneously to a string.
+   "Simultaneous" means: scan left to right, at each position check all rules,
+   apply the longest matching rule, skip past replaced text.
+   This prevents chain replacements: bear→fox + fox→cow produces
+   "fox" where "bear" was and "cow" where "fox" was (not "cow" for both). */
+function applySimultaneousReplacements(text, rules){
+  if(!rules || rules.length === 0) return text;
+  var result = '';
+  var i = 0;
+  while(i < text.length){
+    var bestRule = null;
+    var bestLen = 0;
+    for(var r = 0; r < rules.length; r++){
+      var f = rules[r].find;
+      if(f.length > bestLen && text.substring(i, i + f.length) === f){
+        bestRule = rules[r];
+        bestLen = f.length;
+      }
+    }
+    if(bestRule){
+      result += bestRule.replace;
+      i += bestLen;
+    } else {
+      result += text[i];
+      i++;
     }
   }
-
-  document.getElementById('frMatches').textContent = count + ' replacement' + (count !== 1 ? 's' : '') + ' made';
-  showPanels(); /* refresh preview */
+  return result;
 }
 
 /* ================================================================
@@ -802,23 +868,47 @@ function applyGroupColors(gi){
    GENERATE & DOWNLOAD FDF
    ================================================================ */
 function downloadFdf(){
-  var defaultHex = document.getElementById('defaultColor').value;
-  var defaultRgb = hexToRgb(defaultHex);
+  var wantColors = document.getElementById('colorToggle').checked;
+  var defaultHex = wantColors ? document.getElementById('defaultColor').value : null;
+  var defaultRgb = defaultHex ? hexToRgb(defaultHex) : null;
 
   var blocks = [];
   for(var i=0;i<annotations.length;i++){
     var a = annotations[i];
     if(a.subtype === 'Link' || a.subtype === 'Popup') continue;
 
-    /* Determine color: date override > default */
-    var colorHex = defaultHex;
-    var colorRgb = defaultRgb;
-    if(annotColorOverrides[i]){
-      colorHex = annotColorOverrides[i];
-      colorRgb = hexToRgb(colorHex);
+    /* Determine color: null means no color changes */
+    var colorHex = null;
+    var colorRgb = null;
+    if(wantColors){
+      colorHex = defaultHex;
+      colorRgb = defaultRgb;
+      if(annotColorOverrides[i]){
+        colorHex = annotColorOverrides[i];
+        colorRgb = hexToRgb(colorHex);
+      }
     }
 
-    var block = buildFormattedBlock(a, colorRgb, colorHex);
+    /* Apply simultaneous replacements to Contents */
+    var replacedContents = null;
+    var replacedRC = null;
+    if(replacementRules.length > 0 && a.Contents){
+      var decoded = cleanContents(a.Contents);
+      var newDecoded = applySimultaneousReplacements(decoded, replacementRules);
+      if(newDecoded !== decoded){
+        var encoded = newDecoded.replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)').replace(/\r\n/g,'\\r').replace(/\n/g,'\\r').replace(/\r/g,'\\r');
+        replacedContents = '(' + encoded + ')';
+      }
+      /* Apply to RC too */
+      if(a.RC){
+        var rc = a.RC;
+        if(rc.charAt(0)==='(') rc = rc.substring(1, rc.length-1);
+        var newRC = applySimultaneousReplacements(rc, replacementRules);
+        if(newRC !== rc) replacedRC = '(' + newRC + ')';
+      }
+    }
+
+    var block = buildFormattedBlock(a, colorRgb, colorHex, replacedContents, replacedRC);
     blocks.push(block);
   }
 
@@ -853,8 +943,26 @@ function fullFontName(name){
   return name;
 }
 
-/* Build one annotation dict. Single color for everything — borders, text, lines. */
-function buildFormattedBlock(a, colorRgb, colorHex){
+/* Extract the color portion from a /DA string, preserving original values */
+function extractOriginalDAColor(da){
+  if(!da) return '0 0 0 rg';
+  var s = da;
+  if(s.charAt(0)==='(') s = s.substring(1, s.length-1);
+  var m = s.match(/([\d.]+\s+[\d.]+\s+[\d.]+\s+rg)/);
+  return m ? m[1] : '0 0 0 rg';
+}
+
+/* Extract the color hex from a /DS string */
+function extractOriginalDSColor(ds){
+  if(!ds) return '#000000';
+  var m = ds.match(/color:\s*(#[0-9a-fA-F]{6})/);
+  return m ? m[1] : '#000000';
+}
+
+/* Build one annotation dict.
+   colorRgb/colorHex: null means no color changes (preserve original).
+   replacedContents/replacedRC: null means use original. */
+function buildFormattedBlock(a, colorRgb, colorHex, replacedContents, replacedRC){
   var sub = a.subtype;
   var b = '<<';
   b += '/Type/Annot';
@@ -862,24 +970,31 @@ function buildFormattedBlock(a, colorRgb, colorHex){
   if(a.rect) b += '/Rect' + safeVal(a.rect);
   b += '/Page ' + a.page;
 
-  if(a.Contents) b += '/Contents' + safeVal(a.Contents);
+  /* Contents — use replacement if provided, else original passthrough */
+  var contentsVal = replacedContents || a.Contents;
+  if(contentsVal) b += '/Contents' + safeVal(contentsVal);
+
   if(a.T) b += '/T' + safeVal(a.T);
   if(a.Subj) b += '/Subj' + safeVal(a.Subj);
   if(a.NM) b += '/NM' + safeVal(a.NM);
   if(a.M) b += '/M' + safeVal(a.M);
   if(a.CreationDate) b += '/CreationDate' + safeVal(a.CreationDate);
 
-  /* Color — same color for everything */
-  var cStr = colorRgb.map(function(v){return Math.round(v*1e7)/1e7;}).join(' ');
+  /* Color — if colorRgb is null, preserve originals unchanged */
+  if(colorRgb){
+    var cStr = colorRgb.map(function(v){return Math.round(v*1e7)/1e7;}).join(' ');
 
-  if(sub === 'Square' || sub === 'Line'){
-    b += '/C[' + cStr + ']';
-  } else if(sub === 'FreeText'){
-    /* Background fill stays as original */
-    if(a.C) b += '/C' + safeVal(a.C);
-    /* Border gets the color */
-    b += '/BC[' + cStr + ']';
+    if(sub === 'Square' || sub === 'Line'){
+      b += '/C[' + cStr + ']';
+    } else if(sub === 'FreeText'){
+      if(a.C) b += '/C' + safeVal(a.C);
+      b += '/BC[' + cStr + ']';
+    } else {
+      if(a.C) b += '/C' + safeVal(a.C);
+      if(a.BC) b += '/BC' + safeVal(a.BC);
+    }
   } else {
+    /* No color change — preserve all original color fields */
     if(a.C) b += '/C' + safeVal(a.C);
     if(a.BC) b += '/BC' + safeVal(a.BC);
   }
@@ -898,16 +1013,32 @@ function buildFormattedBlock(a, colorRgb, colorHex){
       if(fsMatch) fontSize = parseFloat(fsMatch[1]);
     }
     var daFont = (chosenFont === 'Helvetica') ? 'Helv' : (chosenFont === 'Arial' ? 'Arial' : daFontName);
-    b += '/DA(' + cStr + ' rg /' + daFont + ' ' + fontSize + ' Tf)';
 
-    var dsFontFull = fullFontName(chosenFont || daFontName);
-    b += '/DS(font: ' + dsFontFull + ',sans-serif ' + fontSize + '.0pt; text-align:left; color:' + colorHex + ')';
+    if(colorRgb){
+      var cStr = colorRgb.map(function(v){return Math.round(v*1e7)/1e7;}).join(' ');
+      b += '/DA(' + cStr + ' rg /' + daFont + ' ' + fontSize + ' Tf)';
+      var dsFontFull = fullFontName(chosenFont || daFontName);
+      b += '/DS(font: ' + dsFontFull + ',sans-serif ' + fontSize + '.0pt; text-align:left; color:' + colorHex + ')';
+    } else if(chosenFont){
+      /* No color change but font change — rewrite DA/DS with original color */
+      b += '/DA(' + extractOriginalDAColor(a.DA) + ' /' + daFont + ' ' + fontSize + ' Tf)';
+      var dsFontFull = fullFontName(chosenFont);
+      var origDSColor = extractOriginalDSColor(a.DS);
+      b += '/DS(font: ' + dsFontFull + ',sans-serif ' + fontSize + '.0pt; text-align:left; color:' + origDSColor + ')';
+    } else {
+      /* No color change, no font change — preserve originals */
+      if(a.DA) b += '/DA' + safeVal(a.DA);
+      if(a.DS) b += '/DS' + safeVal(a.DS);
+    }
 
-    if(a.RC){
-      var rc = a.RC;
+    /* RC — use replacement if provided, apply color/font changes */
+    var rcVal = replacedRC || a.RC;
+    if(rcVal){
+      var rc = rcVal;
       if(rc.charAt(0)==='(') rc = rc.substring(1, rc.length-1);
-      rc = rc.replace(/color:#[0-9a-fA-F]{6}/g, 'color:' + colorHex);
+      if(colorHex) rc = rc.replace(/color:#[0-9a-fA-F]{6}/g, 'color:' + colorHex);
       if(chosenFont){
+        var dsFontFull = fullFontName(chosenFont);
         rc = rc.replace(/font-family:[^;"]+/g, 'font-family:' + dsFontFull + ',sans-serif');
       }
       b += '/RC(' + rc + ')';
