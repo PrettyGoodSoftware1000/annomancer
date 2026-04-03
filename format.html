@@ -642,12 +642,11 @@ var replacementRules = []; /* [{find:'...', replace:'...'}] */
 function updateMatchCount(){
   var find = document.getElementById('findInput').value;
   if(!find){ document.getElementById('frMatches').textContent = ''; return; }
-  var findLower = find.toLowerCase();
   var count = 0;
   for(var i=0;i<annotations.length;i++){
-    var c = (annotations[i]._contentsClean || '').toLowerCase();
+    var c = annotations[i]._contentsClean || '';
     var idx = 0;
-    while(true){ idx = c.indexOf(findLower, idx); if(idx === -1) break; count++; idx++; }
+    while(true){ idx = c.indexOf(find, idx); if(idx === -1) break; count++; idx++; }
   }
   document.getElementById('frMatches').textContent = count + ' match' + (count !== 1 ? 'es' : '') + ' in original text';
 }
@@ -684,24 +683,22 @@ function renderRuleStack(){
 }
 
 /* Apply all replacement rules simultaneously to a string.
-   Find matching is CASE-INSENSITIVE. Replacement text is inserted exactly as typed.
-   Scan left to right, at each position check all rules,
+   "Simultaneous" means: scan left to right, at each position check all rules,
    apply the longest matching rule, skip past replaced text.
    This prevents chain replacements: bear→fox + fox→cow produces
    "fox" where "bear" was and "cow" where "fox" was (not "cow" for both). */
 function applySimultaneousReplacements(text, rules){
   if(!rules || rules.length === 0) return text;
-  var textLower = text.toLowerCase();
   var result = '';
   var i = 0;
   while(i < text.length){
     var bestRule = null;
     var bestLen = 0;
     for(var r = 0; r < rules.length; r++){
-      var fLower = rules[r].find.toLowerCase();
-      if(fLower.length > bestLen && textLower.substring(i, i + fLower.length) === fLower){
+      var f = rules[r].find;
+      if(f.length > bestLen && text.substring(i, i + f.length) === f){
         bestRule = rules[r];
-        bestLen = fLower.length;
+        bestLen = f.length;
       }
     }
     if(bestRule){
@@ -1034,10 +1031,8 @@ function buildFormattedBlock(a, colorRgb, colorHex, replacedContents, replacedRC
       if(a.DS) b += '/DS' + safeVal(a.DS);
     }
 
-    /* RC — if Contents was replaced but RC replacement failed (e.g. XML tags
-       split the find text across spans), omit RC entirely so Adobe regenerates
-       it from the updated Contents. */
-    var rcVal = replacedRC || (replacedContents ? null : a.RC);
+    /* RC — use replacement if provided, apply color/font changes */
+    var rcVal = replacedRC || a.RC;
     if(rcVal){
       var rc = rcVal;
       if(rc.charAt(0)==='(') rc = rc.substring(1, rc.length-1);
