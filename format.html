@@ -621,6 +621,15 @@ function showPanels(){
 
   /* Wire up find input for live match count */
   document.getElementById('findInput').oninput = updateMatchCount;
+
+  /* Auto-trim whitespace on paste for both find and replace inputs */
+  function trimOnPaste(el){
+    el.addEventListener('paste', function(){
+      setTimeout(function(){ el.value = el.value.trim(); updateMatchCount(); }, 0);
+    });
+  }
+  trimOnPaste(document.getElementById('findInput'));
+  trimOnPaste(document.getElementById('replaceInput'));
 }
 
 function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -640,7 +649,7 @@ function toggleColorPanels(){
 var replacementRules = []; /* [{find:'...', replace:'...'}] */
 
 function updateMatchCount(){
-  var find = document.getElementById('findInput').value;
+  var find = document.getElementById('findInput').value.trim();
   if(!find){ document.getElementById('frMatches').textContent = ''; return; }
   var findLower = find.toLowerCase();
   var count = 0;
@@ -653,8 +662,8 @@ function updateMatchCount(){
 }
 
 function addReplacement(){
-  var find = document.getElementById('findInput').value;
-  var replace = document.getElementById('replaceInput').value;
+  var find = document.getElementById('findInput').value.trim();
+  var replace = document.getElementById('replaceInput').value.trim();
   if(!find) return;
   replacementRules.push({find: find, replace: replace});
   document.getElementById('findInput').value = '';
