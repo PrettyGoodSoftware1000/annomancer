@@ -1034,8 +1034,10 @@ function buildFormattedBlock(a, colorRgb, colorHex, replacedContents, replacedRC
       if(a.DS) b += '/DS' + safeVal(a.DS);
     }
 
-    /* RC — use replacement if provided, apply color/font changes */
-    var rcVal = replacedRC || a.RC;
+    /* RC — if Contents was replaced but RC replacement failed (e.g. XML tags
+       split the find text across spans), omit RC entirely so Adobe regenerates
+       it from the updated Contents. */
+    var rcVal = replacedRC || (replacedContents ? null : a.RC);
     if(rcVal){
       var rc = rcVal;
       if(rc.charAt(0)==='(') rc = rc.substring(1, rc.length-1);
