@@ -79,11 +79,28 @@
     box-shadow: none;
   }
 
-  .wip-tag {
+  .btn-experimental {
+    background: #555;
+  }
+  .btn-experimental:hover {
+    background: #333;
+  }
+
+  .experimental-panel {
+    display: none;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .experimental-panel.open {
+    display: flex;
+  }
+
+  .experimental-label {
     font-size: 12px;
-    opacity: 0.7;
-    margin-left: 8px;
-    font-weight: 400;
+    color: #888;
+    text-align: left;
+    padding-left: 4px;
+    margin-bottom: -4px;
   }
 </style>
 </head>
@@ -105,18 +122,32 @@
       Take some annos from a PDF to make a spreadsheet.
     </a>
 
-    <a href="transfer.html" class="tool-btn">
-      Transfer annos.
-    </a>
-
     <a href="format.html" class="tool-btn">
       Format some annos.
     </a>
 
-    <div class="tool-btn btn-disabled">
-      Auto-QC something letterboxed.<span class="wip-tag">I'm working on it</span>
+    <button class="tool-btn btn-experimental" onclick="toggleExperimental(this)">
+      Experimental stuff.
+    </button>
+
+    <div class="experimental-panel" id="experimentalPanel">
+      <div class="experimental-label">Experimental tools</div>
+      <a href="transfer.html" class="tool-btn">
+        Transfer annos.
+      </a>
+      <a href="AutoQC.html" class="tool-btn">
+        Auto-QC.
+      </a>
     </div>
   </div>
+
+  <script>
+  function toggleExperimental(btn){
+    var panel = document.getElementById('experimentalPanel');
+    var isOpen = panel.classList.toggle('open');
+    btn.textContent = isOpen ? 'Hide experimental stuff.' : 'Experimental stuff.';
+  }
+  </script>
 </div>
 
 </body>
