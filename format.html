@@ -543,6 +543,88 @@ function hexToRgb(hex){
   return [parseInt(hex.substr(0,2),16)/255, parseInt(hex.substr(2,2),16)/255, parseInt(hex.substr(4,2),16)/255];
 }
 
+/* Map of non-ASCII characters to their ASCII equivalents.
+   These commonly get introduced by macOS smart-text auto-correction, rich-text
+   copy-paste from Word/Pages, or curly-quote substitution. Inserting them into
+   a PDF literal caused FDF corruption, so we strip them to ASCII before output. */
+var ASCII_NORMALIZE_MAP = {
+  /* Dashes and hyphens — all become regular hyphen */
+  '\u2010': '-', '\u2011': '-', '\u2012': '-', '\u2013': '-',
+  '\u2014': '-', '\u2015': '-', '\u2212': '-',
+  /* Quotes */
+  '\u2018': "'", '\u2019': "'", '\u201A': "'", '\u201B': "'",
+  '\u201C': '"', '\u201D': '"', '\u201E': '"', '\u201F': '"',
+  '\u00AB': '"', '\u00BB': '"', '\u2039': "'", '\u203A': "'",
+  '\u0060': "'", '\u00B4': "'",
+  /* Spaces (visible and invisible) */
+  '\u00A0': ' ', '\u1680': ' ', '\u2000': ' ', '\u2001': ' ',
+  '\u2002': ' ', '\u2003': ' ', '\u2004': ' ', '\u2005': ' ',
+  '\u2006': ' ', '\u2007': ' ', '\u2008': ' ', '\u2009': ' ',
+  '\u200A': ' ', '\u202F': ' ', '\u205F': ' ', '\u3000': ' ',
+  /* Invisible characters — strip entirely */
+  '\u200B': '', '\u200C': '', '\u200D': '', '\u2060': '',
+  '\uFEFF': '', '\u00AD': '',
+  /* Ellipsis */
+  '\u2026': '...',
+  /* Symbols */
+  '\u2022': '*', '\u00B7': '.', '\u2043': '*',
+  '\u00D7': 'x', '\u00F7': '/',
+  '\u00A9': '(c)', '\u00AE': '(r)', '\u2122': '(tm)',
+  /* Fractions */
+  '\u00BC': '1/4', '\u00BD': '1/2', '\u00BE': '3/4',
+  /* Arrows */
+  '\u2190': '<-', '\u2192': '->', '\u2194': '<->',
+  '\u21D0': '<=', '\u21D2': '=>', '\u21D4': '<=>'
+};
+
+/* Convert any non-ASCII characters to their closest ASCII equivalents.
+   Unknown non-ASCII characters are stripped (returns empty) to prevent
+   corrupted FDF output. */
+function normalizeToAscii(s){
+  if(!s) return s;
+  var result = '';
+  for(var i = 0; i < s.length; i++){
+    var ch = s[i];
+    var code = ch.charCodeAt(0);
+    if(code < 0x80){
+      result += ch;
+    } else if(ASCII_NORMALIZE_MAP.hasOwnProperty(ch)){
+      result += ASCII_NORMALIZE_MAP[ch];
+    }
+    /* else: strip unknown non-ASCII character silently */
+  }
+  return result;
+}
+
+/* Encode a string as a PDF string literal. Input must already be ASCII.
+   Handles PDF-spec escapes: backslash, parens, and line breaks. */
+function encodePdfString(s){
+  var result = '';
+  for(var i = 0; i < s.length; i++){
+    var ch = s[i];
+    var code = ch.charCodeAt(0);
+    if(ch === '\\'){ result += '\\\\'; continue; }
+    if(ch === '('){ result += '\\('; continue; }
+    if(ch === ')'){ result += '\\)'; continue; }
+    if(ch === '\r' || ch === '\n'){ result += '\\r'; continue; }
+    if(code < 0x20){
+      /* Control char: octal escape */
+      result += '\\' + ('000' + code.toString(8)).slice(-3);
+      continue;
+    }
+    if(code < 0x7F){
+      result += ch;
+      continue;
+    }
+    /* Any remaining non-ASCII: normalize (belt-and-suspenders safety net) */
+    if(ASCII_NORMALIZE_MAP.hasOwnProperty(ch)){
+      result += ASCII_NORMALIZE_MAP[ch];
+    }
+    /* else: silently drop */
+  }
+  return result;
+}
+
 /* ================================================================
    SHOW PANELS & SUMMARY
    ================================================================ */
@@ -622,14 +704,20 @@ function showPanels(){
   /* Wire up find input for live match count */
   document.getElementById('findInput').oninput = updateMatchCount;
 
-  /* Auto-trim whitespace on paste for both find and replace inputs */
-  function trimOnPaste(el){
+  /* Auto-trim whitespace and normalize non-ASCII on paste. This converts
+     smart dashes/quotes/spaces introduced by macOS auto-correct or
+     rich-text copy-paste into their ASCII equivalents so the user sees
+     immediately what will end up in the FDF. */
+  function cleanOnPaste(el){
     el.addEventListener('paste', function(){
-      setTimeout(function(){ el.value = el.value.trim(); updateMatchCount(); }, 0);
+      setTimeout(function(){
+        el.value = normalizeToAscii(el.value).trim();
+        updateMatchCount();
+      }, 0);
     });
   }
-  trimOnPaste(document.getElementById('findInput'));
-  trimOnPaste(document.getElementById('replaceInput'));
+  cleanOnPaste(document.getElementById('findInput'));
+  cleanOnPaste(document.getElementById('replaceInput'));
 }
 
 function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -662,8 +750,11 @@ function updateMatchCount(){
 }
 
 function addReplacement(){
-  var find = document.getElementById('findInput').value.trim();
-  var replace = document.getElementById('replaceInput').value.trim();
+  /* Normalize non-ASCII characters to ASCII equivalents to prevent FDF corruption.
+     Even if paste didn't catch it (e.g., user typed em-dash with a shortcut),
+     we clean it here before the rule is stored. */
+  var find = normalizeToAscii(document.getElementById('findInput').value).trim();
+  var replace = normalizeToAscii(document.getElementById('replaceInput').value).trim();
   if(!find) return;
   replacementRules.push({find: find, replace: replace});
   document.getElementById('findInput').value = '';
@@ -908,15 +999,28 @@ function downloadFdf(){
       var decoded = cleanContents(a.Contents);
       var newDecoded = applySimultaneousReplacements(decoded, replacementRules);
       if(newDecoded !== decoded){
-        var encoded = newDecoded.replace(/\\/g,'\\\\').replace(/\(/g,'\\(').replace(/\)/g,'\\)').replace(/\r\n/g,'\\r').replace(/\n/g,'\\r').replace(/\r/g,'\\r');
-        replacedContents = '(' + encoded + ')';
+        /* Use proper PDF string encoder — handles en-dashes, smart quotes,
+           and any other non-ASCII via octal escapes. Output stays pure ASCII. */
+        replacedContents = '(' + encodePdfString(newDecoded) + ')';
       }
-      /* Apply to RC too */
+      /* Apply to RC too. RC is already an XML body; don't octal-escape the
+         whole thing (that would mangle the XML). Only escape non-ASCII chars
+         introduced by the replacement text. */
       if(a.RC){
         var rc = a.RC;
         if(rc.charAt(0)==='(') rc = rc.substring(1, rc.length-1);
         var newRC = applySimultaneousReplacements(rc, replacementRules);
-        if(newRC !== rc) replacedRC = '(' + newRC + ')';
+        if(newRC !== rc){
+          /* Convert non-ASCII chars in RC to numeric XML entities.
+             This preserves XML structure while making the output ASCII-safe. */
+          var asciiRC = '';
+          for(var ci = 0; ci < newRC.length; ci++){
+            var cc = newRC.charCodeAt(ci);
+            if(cc < 0x80){ asciiRC += newRC[ci]; }
+            else { asciiRC += '&#' + cc + ';'; }
+          }
+          replacedRC = '(' + asciiRC + ')';
+        }
       }
     }
 
