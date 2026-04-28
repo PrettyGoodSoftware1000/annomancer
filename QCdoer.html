@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Letterbox QC</title>
+<script src="pdf-lib.min.js"></script>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+    background: #f5f6fa;
+    color: #222;
+    min-height: 100vh;
+  }
+
+  .masthead {
+    width: 100%;
+    background: #1a1a2e;
+    display: flex;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .masthead img {
+    display: block;
+    max-width: 1536px;
+    width: 100%;
+    height: auto;
+  }
+
+  .page-content {
+    text-align: center;
+    padding: 30px;
+    max-width: 860px;
+    margin: 0 auto;
+  }
+
+  .back-link { display:inline-block; margin-bottom:20px; color:#0078ff; text-decoration:none; }
+  .back-link:hover { text-decoration:underline; }
+  h1 { font-size:28px; font-weight:700; color:#1a1a2e; margin-bottom:8px; }
+  .subtitle { color:#666; margin-bottom:30px; font-size:15px; }
+
+  /* Drop zone */
+  .drop-zone {
+    width: 100%;
+    max-width: 500px;
+    height: 160px;
+    border: 3px dashed #ccc;
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: #fff;
+    transition: all 0.2s ease;
+    cursor: pointer;
+    margin: 0 auto 28px;
+    padding: 16px;
+  }
+  .drop-zone:hover { border-color:#0078ff; background:#f0f7ff; }
+  .drop-zone.drag-over { border-color:#0078ff; background:#e0f0ff; transform:scale(1.02); }
+  .drop-zone.has-file { border-color:#28a745; background:#e8f5e9; }
+  .drop-zone h3 { margin:0 0 4px; color:#333; font-size:16px; }
+  .drop-zone .drop-msg { color:#888; font-size:14px; margin:4px 0; }
+  .drop-zone .file-name { margin-top:10px; font-weight:600; color:#28a745; word-break:break-all; font-size:13px; }
+  .drop-zone input[type="file"] { display:none; }
+  .drop-zone .fallback-btn {
+    margin-top:8px; padding:8px 16px; background:#0078ff; color:#fff;
+    border:none; border-radius:6px; cursor:pointer; font-size:13px;
+  }
+  .drop-zone .fallback-btn:hover { background:#005fd1; }
+
+  .panel {
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    padding: 24px;
+    margin-bottom: 20px;
+    text-align: left;
+    display: none;
+  }
+  .panel h2 { font-size:16px; color:#1a1a2e; margin-bottom:14px; font-weight:600; }
+  .panel.visible { display:block; }
+
+  .preview-list {
+    max-height: 360px;
+    overflow-y: auto;
+    border: 1px solid #eee;
+    border-radius: 8px;
+    margin-top: 12px;
+  }
+  .preview-item {
+    padding: 12px 14px;
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 13px;
+  }
+  .preview-item:last-child { border-bottom:none; }
+  .preview-item .pi-row { display:flex; gap:10px; margin-bottom:4px; }
+  .preview-item .pi-label { color:#888; font-size:11px; min-width:80px; }
+  .preview-item .pi-value { color:#333; word-break:break-word; flex:1; }
+  .preview-item .pi-tags { font-weight:600; color:#0078ff; }
+  .preview-item .pi-rect { font-family:monospace; font-size:11px; color:#aaa; }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .summary-card {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 12px;
+    text-align: center;
+  }
+  .summary-card .count { font-size:28px; font-weight:700; color:#1a1a2e; }
+  .summary-card .label { font-size:12px; color:#888; margin-top:2px; }
+
+  .download-section { margin-top:24px; text-align:center; }
+  .dl-btn {
+    padding:14px 36px; border-radius:8px; border:none;
+    font-size:18px; font-weight:600; cursor:pointer;
+    color:#fff; background:#28a745; transition:background 0.15s;
+  }
+  .dl-btn:hover { background:#1e7e34; }
+  .dl-btn:disabled { background:#aaa; cursor:not-allowed; }
+
+  #status {
+    margin:20px auto; max-width:700px; font-size:13px; text-align:left;
+    background:#fff; border-radius:8px; padding:14px;
+    box-shadow:0 2px 6px rgba(0,0,0,0.1); white-space:pre-wrap; display:none;
+  }
+</style>
+</head>
+<body>
+
+<div class="masthead">
+  <img src="masthead.png" alt="Annomancer" width="1536" height="514" />
+</div>
+
+<div class="page-content">
+
+<a href="index.html" class="back-link">&larr; Back</a>
+<h1>Letterbox QC</h1>
+<p class="subtitle">Find pXY tags in box comments and add them to the boxes as labels</p>
+
+<div class="drop-zone" id="pdfZone">
+  <h3>Upload an annotated PDF</h3>
+  <p class="drop-msg">Drop PDF here</p>
+  <p class="drop-msg">or</p>
+  <button class="fallback-btn" onclick="document.getElementById('pdfInput').click()">Select File</button>
+  <input type="file" id="pdfInput" accept="application/pdf" />
+  <div class="file-name" id="pdfName"></div>
+</div>
+
+<div class="panel" id="summaryPanel">
+  <h2>Found in Comments</h2>
+  <div class="summary-grid" id="summaryGrid"></div>
+  <div class="preview-list" id="boxPreview"></div>
+</div>
+
+<div class="panel download-section" id="downloadPanel">
+  <button class="dl-btn" id="dlBtn" onclick="downloadFdf()">Download QC labels as .fdf</button>
+  <p style="font-size:12px;color:#888;margin-top:10px;">Import this FDF into your PDF to add the labels.</p>
+</div>
+
+<div id="status"></div>
+
+</div>
+
+<script>
+var PDFDocument, PDFName, PDFArray, PDFDict, PDFStream, PDFRef;
+function ensurePdfLib(){
+  if(!PDFDocument && typeof PDFLib !== 'undefined'){
+    PDFDocument=PDFLib.PDFDocument; PDFName=PDFLib.PDFName; PDFArray=PDFLib.PDFArray;
+    PDFDict=PDFLib.PDFDict; PDFStream=PDFLib.PDFStream; PDFRef=PDFLib.PDFRef;
+  }
+}
+
+var statusEl = document.getElementById('status');
+function log(msg){ statusEl.style.display='block'; statusEl.textContent+=msg+'\n'; }
+
+/* State */
+var boxes = [];          /* [{rect, contents, tags, page, originalAnnot, ...}] */
+var allOriginalAnnots = []; /* Every existing annotation, for retention in FDF */
+var pdfFileName = '';
+
+/* Drop zone */
+(function(){
+  var zone = document.getElementById('pdfZone');
+  var input = document.getElementById('pdfInput');
+  var nameEl = document.getElementById('pdfName');
+
+  zone.addEventListener('dragover', function(e){ e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', function(){ zone.classList.remove('drag-over'); });
+  zone.addEventListener('drop', function(e){
+    e.preventDefault(); zone.classList.remove('drag-over');
+    if(e.dataTransfer.files.length > 0 && e.dataTransfer.files[0].type === 'application/pdf')
+      handleFile(e.dataTransfer.files[0]);
+  });
+  zone.addEventListener('click', function(e){ if(e.target.tagName !== 'BUTTON') input.click(); });
+  input.addEventListener('change', function(){ if(this.files[0]) handleFile(this.files[0]); });
+
+  function handleFile(file){
+    zone.classList.add('has-file');
+    nameEl.textContent = file.name;
+    pdfFileName = file.name;
+    var msgs = zone.querySelectorAll('.drop-msg, .fallback-btn');
+    for(var i=0;i<msgs.length;i++) msgs[i].style.display='none';
+    loadPdf(file);
+  }
+})();
+
+/* ================================================================
+   LOAD PDF + EXTRACT BOXES + FIND pXY TAGS
+   ================================================================ */
+async function loadPdf(file){
+  statusEl.textContent = '';
+  log('Loading PDF...');
+  try {
+    ensurePdfLib();
+    var data = new Uint8Array(await file.arrayBuffer());
+    var lib = await PDFDocument.load(data, {ignoreEncryption:true});
+    var pages = lib.getPages();
+    boxes = [];
+    allOriginalAnnots = [];
+
+    for(var pi = 0; pi < pages.length; pi++){
+      var pg = pages[pi];
+      var annotsRef = pg.node.get(PDFName.of('Annots'));
+      if(!annotsRef) continue;
+      var annots = pg.node.lookup(PDFName.of('Annots'));
+      if(!annots || !(annots instanceof PDFArray)) continue;
+
+      for(var j = 0; j < annots.size(); j++){
+        try {
+          var ad = lib.context.lookup(annots.get(j));
+          if(!(ad instanceof PDFDict)) continue;
+          var st = ad.get(PDFName.of('Subtype'));
+          if(!st) continue;
+          var subtype = st.toString().replace('/','');
+
+          /* Read all useful fields as raw strings */
+          var raw = {};
+          var fields = ['Contents','T','Subj','NM','M','CreationDate','RC','C','BC',
+            'IC','BS','Border','RD','F','Ff','CA','Popup','Rect','DA','DS','RS'];
+          for(var f = 0; f < fields.length; f++){
+            var v = ad.get(PDFName.of(fields[f]));
+            if(v){
+              if(v instanceof PDFRef){
+                try {
+                  var resolved = lib.context.lookup(v);
+                  if(resolved && !(resolved instanceof PDFStream)) raw[fields[f]] = resolved.toString();
+                } catch(e){}
+              } else {
+                raw[fields[f]] = v.toString();
+              }
+            }
+          }
+
+          allOriginalAnnots.push({subtype: subtype, fields: raw, page: pi});
+
+          if(subtype === 'Square'){
+            var rect = parseNumArray(raw.Rect);
+            var contents = decodePdfString(stripParens(raw.Contents || ''));
+            var tags = findTags(contents);
+            boxes.push({
+              page: pi,
+              rect: rect,
+              rectStr: raw.Rect,
+              contents: contents,
+              tags: tags,
+              fields: raw
+            });
+          }
+        } catch(e){}
+      }
+    }
+
+    log('Found ' + boxes.length + ' boxes, ' + allOriginalAnnots.length + ' total annotations.');
+    showResults();
+  } catch(err){
+    log('Error: ' + err.message);
+    console.error(err);
+  }
+}
+
+function stripParens(s){
+  if(!s) return '';
+  if(s.charAt(0) === '(' && s.charAt(s.length-1) === ')') return s.substring(1, s.length-1);
+  return s;
+}
+
+/* Decode PDF string escapes: \r \n \t \\ \( \) \nnn (octal) */
+function decodePdfString(s){
+  if(!s) return '';
+  var result = '';
+  for(var i = 0; i < s.length; i++){
+    if(s[i] === '\\' && i + 1 < s.length){
+      var n = s[i+1];
+      if(n === 'r'){ result += '\r'; i++; }
+      else if(n === 'n'){ result += '\n'; i++; }
+      else if(n === 't'){ result += '\t'; i++; }
+      else if(n === '\\'){ result += '\\'; i++; }
+      else if(n === '('){ result += '('; i++; }
+      else if(n === ')'){ result += ')'; i++; }
+      else if(n >= '0' && n <= '7'){
+        /* Octal escape — up to 3 digits */
+        var oct = n;
+        if(i + 2 < s.length && s[i+2] >= '0' && s[i+2] <= '7') oct += s[i+2];
+        if(oct.length < 3 && i + 3 < s.length && s[i+3] >= '0' && s[i+3] <= '7') oct += s[i+3];
+        result += String.fromCharCode(parseInt(oct, 8));
+        i += oct.length;
+      } else {
+        result += s[i];
+      }
+    } else {
+      result += s[i];
+    }
+  }
+  return result;
+}
+
+function parseNumArray(s){
+  if(!s) return null;
+  var clean = s.replace(/[\[\]]/g,'').trim();
+  if(!clean) return null;
+  var parts = clean.split(/\s+/);
+  var nums = [];
+  for(var i=0;i<parts.length;i++){
+    var n = parseFloat(parts[i]);
+    if(!isNaN(n)) nums.push(n);
+  }
+  return nums.length >= 4 ? nums : null;
+}
+
+/* Find pXY tags in text. Returns array of strings in order of appearance.
+   Pattern: 'p' followed by 1+ digits followed by exactly one letter,
+   not followed by a digit or letter. Word boundary on the left.
+   Examples: p1A, p7D, p12D match. p7) p4042 don't (no letter / wrong pattern). */
+function findTags(text){
+  if(!text) return [];
+  var re = /\bp(\d+)([A-Za-z])(?![A-Za-z0-9])/g;
+  var matches = [];
+  var m;
+  while((m = re.exec(text)) !== null){
+    matches.push('p' + m[1] + m[2].toUpperCase());
+  }
+  return matches;
+}
+
+/* ================================================================
+   SHOW RESULTS
+   ================================================================ */
+function showResults(){
+  var withTags = 0, withoutTags = 0, totalTags = 0;
+  for(var i = 0; i < boxes.length; i++){
+    if(boxes[i].tags.length > 0){ withTags++; totalTags += boxes[i].tags.length; }
+    else { withoutTags++; }
+  }
+
+  var grid = document.getElementById('summaryGrid');
+  grid.innerHTML =
+    '<div class="summary-card"><div class="count">'+boxes.length+'</div><div class="label">Boxes</div></div>' +
+    '<div class="summary-card"><div class="count">'+withTags+'</div><div class="label">With tags</div></div>' +
+    '<div class="summary-card"><div class="count">'+withoutTags+'</div><div class="label">Without tags</div></div>' +
+    '<div class="summary-card"><div class="count">'+totalTags+'</div><div class="label">Total tags</div></div>';
+
+  var preview = document.getElementById('boxPreview');
+  var html = '';
+  for(var i = 0; i < boxes.length; i++){
+    var b = boxes[i];
+    var commentDisplay = (b.contents || '(empty)').substring(0, 200);
+    if(b.contents && b.contents.length > 200) commentDisplay += '...';
+    html += '<div class="preview-item">';
+    html += '<div class="pi-row"><span class="pi-label">Page ' + (b.page+1) + '</span>';
+    html += '<span class="pi-value pi-tags">' + (b.tags.length ? b.tags.join(', ') : '(no tags found)') + '</span></div>';
+    html += '<div class="pi-row"><span class="pi-label">Comment</span>';
+    html += '<span class="pi-value">' + escHtml(commentDisplay.replace(/\n/g,' ')) + '</span></div>';
+    if(b.rect){
+      html += '<div class="pi-row"><span class="pi-label">Rect</span>';
+      html += '<span class="pi-value pi-rect">[' + b.rect.map(function(n){return n.toFixed(1);}).join(', ') + ']</span></div>';
+    }
+    html += '</div>';
+  }
+  preview.innerHTML = html;
+
+  document.getElementById('summaryPanel').classList.add('visible');
+  document.getElementById('downloadPanel').classList.add('visible');
+
+  var btn = document.getElementById('dlBtn');
+  if(totalTags === 0){
+    btn.disabled = true;
+    btn.textContent = 'No tags found — nothing to download';
+  } else {
+    btn.disabled = false;
+    btn.textContent = 'Download QC labels as .fdf';
+  }
+  statusEl.style.display = 'none';
+}
+
+function escHtml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+/* ================================================================
+   FDF GENERATION
+   ================================================================ */
+/* Encode string for use as a PDF literal string, ASCII-safe */
+function encodePdfString(s){
+  if(!s) return '';
+  var result = '';
+  for(var i = 0; i < s.length; i++){
+    var ch = s[i];
+    var code = ch.charCodeAt(0);
+    if(ch === '\\'){ result += '\\\\'; continue; }
+    if(ch === '('){ result += '\\('; continue; }
+    if(ch === ')'){ result += '\\)'; continue; }
+    if(ch === '\r' || ch === '\n'){ result += '\\r'; continue; }
+    if(code < 0x20){
+      result += '\\' + ('000' + code.toString(8)).slice(-3);
+      continue;
+    }
+    if(code < 0x7F){ result += ch; continue; }
+    /* Non-ASCII: skip silently to keep file ASCII-safe */
+  }
+  return result;
+}
+
+function safeVal(v){
+  if(!v) return '';
+  var first = v.charAt(0);
+  if(first === '(' || first === '[' || first === '<' || first === '/') return v;
+  return ' ' + v;
+}
+
+/* Build a FreeText label annotation that sits inside a Square's rect.
+   The text is the comma-separated pXY tags. Black text on white background.
+   The /F flag is set to 4 (printable) but NOT 128 (locked) so the user can
+   move/edit the labels in Acrobat. */
+function buildFreeTextLabel(box, tagText){
+  if(!box.rect) return '';
+
+  /* Place a small label box in the upper-left corner of the Square.
+     Width sized to the text + padding, height ~14pt for 8pt Helvetica. */
+  var x1 = Math.min(box.rect[0], box.rect[2]);
+  var y1 = Math.min(box.rect[1], box.rect[3]);
+  var x2 = Math.max(box.rect[0], box.rect[2]);
+  var y2 = Math.max(box.rect[1], box.rect[3]);
+
+  /* Heuristic width: ~6 points per character at 8pt Helvetica + 8 padding */
+  var labelW = Math.min(x2 - x1, Math.max(40, tagText.length * 6 + 8));
+  var labelH = 14;
+  var labelX1 = x1;
+  var labelY2 = y2;
+  var labelY1 = labelY2 - labelH;
+  var labelX2 = labelX1 + labelW;
+
+  var rectStr = '[' + labelX1.toFixed(3) + ' ' + labelY1.toFixed(3) + ' ' +
+                       labelX2.toFixed(3) + ' ' + labelY2.toFixed(3) + ']';
+
+  var safeText = encodePdfString(tagText);
+
+  /* Rich text body — keep simple, ASCII only */
+  var rcXml = '<?xml version="1.0"?><body xmlns="http://www.w3.org/1999/xhtml" ' +
+              'xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/" xfa:APIVersion="Acrobat:25.1.0" xfa:spec="2.0.2">' +
+              '<p dir="ltr"><span dir="ltr" style="font-size:8.0pt;text-align:left;color:#000000;' +
+              'font-weight:normal;font-style:normal;font-family:Helvetica,sans-serif;font-stretch:normal">' +
+              encodePdfString(tagText) + '</span></p></body>';
+
+  var b = '<<';
+  b += '/Type/Annot';
+  b += '/Subtype/FreeText';
+  b += '/Rect' + rectStr;
+  b += '/Page ' + box.page;
+  b += '/Contents(' + safeText + ')';
+  b += '/T(QCdoer)';
+  b += '/Subj(QC Label)';
+  b += '/F 4';   /* printable, not locked */
+  b += '/C[1 1 1]';     /* white background */
+  b += '/BC[0 0 0]';    /* black border */
+  b += '/DA(0 0 0 rg /Helv 8 Tf)';
+  b += '/DS(font: Helvetica,sans-serif 8.0pt; text-align:left; color:#000000)';
+  b += '/RC(' + rcXml + ')';
+  b += '/RD[1 1 1 1]';
+  b += '/BS<</W 0/S/S>>'; /* solid 0-width border = no visible border but valid */
+  b += '/Border[0 0 0]';
+  b += '>>';
+  return b;
+}
+
+/* Build a block that re-emits an existing annotation, removing the lock flag
+   so users can edit/move the comment. Preserves all original fields including
+   AP appearance streams via /Contents pass-through (Acrobat regenerates AP). */
+function buildExistingAnnotBlock(annot){
+  var sub = annot.subtype;
+  var f = annot.fields;
+  if(!f.Rect) return '';
+
+  /* Strip the locked bit (128) from /F. Keep printable bit (4) and others. */
+  var fVal = 4;
+  if(f.F){
+    var n = parseInt(f.F.trim(), 10);
+    if(!isNaN(n)) fVal = n & ~128; /* clear bit 7 = unlock */
+  }
+
+  /* Strip locked bits from /Ff too (used on form fields, occasionally annots) */
+  var ffVal = null;
+  if(f.Ff){
+    var nf = parseInt(f.Ff.trim(), 10);
+    if(!isNaN(nf)) ffVal = nf & ~1; /* clear ReadOnly bit */
+  }
+
+  var b = '<<';
+  b += '/Type/Annot';
+  b += '/Subtype/' + sub;
+  b += '/Rect' + safeVal(f.Rect);
+  b += '/Page ' + annot.page;
+  if(f.Contents) b += '/Contents' + safeVal(f.Contents);
+  if(f.T) b += '/T' + safeVal(f.T);
+  if(f.Subj) b += '/Subj' + safeVal(f.Subj);
+  if(f.NM) b += '/NM' + safeVal(f.NM);
+  if(f.M) b += '/M' + safeVal(f.M);
+  if(f.CreationDate) b += '/CreationDate' + safeVal(f.CreationDate);
+  if(f.RC) b += '/RC' + safeVal(f.RC);
+  if(f.C) b += '/C' + safeVal(f.C);
+  if(f.BC) b += '/BC' + safeVal(f.BC);
+  if(f.IC) b += '/IC' + safeVal(f.IC);
+  if(f.BS) b += '/BS' + safeVal(f.BS);
+  if(f.Border) b += '/Border' + safeVal(f.Border);
+  if(f.RD) b += '/RD' + safeVal(f.RD);
+  if(f.DA) b += '/DA' + safeVal(f.DA);
+  if(f.DS) b += '/DS' + safeVal(f.DS);
+  if(f.CA) b += '/CA' + safeVal(f.CA);
+  b += '/F ' + fVal;
+  if(ffVal !== null) b += '/Ff ' + ffVal;
+  /* Note: /Popup is intentionally omitted — popup parents won't survive
+     the FDF round-trip without their referenced popup object, but Acrobat
+     regenerates them automatically when comments are imported. */
+  b += '>>';
+  return b;
+}
+
+function downloadFdf(){
+  var blocks = [];
+
+  /* 1. Re-emit all original annotations (unlocked) */
+  for(var i = 0; i < allOriginalAnnots.length; i++){
+    var sub = allOriginalAnnots[i].subtype;
+    /* Skip Link and Popup — these are document infrastructure, not user annos */
+    if(sub === 'Link' || sub === 'Popup') continue;
+    var block = buildExistingAnnotBlock(allOriginalAnnots[i]);
+    if(block) blocks.push(block);
+  }
+
+  /* 2. Add new FreeText labels for boxes with tags */
+  for(var i = 0; i < boxes.length; i++){
+    if(boxes[i].tags.length === 0) continue;
+    var tagText = boxes[i].tags.join(', ');
+    var block = buildFreeTextLabel(boxes[i], tagText);
+    if(block) blocks.push(block);
+  }
+
+  var fdf = '%FDF-1.2\r\n%\xe2\xe3\xcf\xd3\r\n';
+  fdf += '1 0 obj\r\n<</FDF<</Annots[';
+  fdf += blocks.join('');
+  fdf += ']>>>>\r\nendobj\r\n';
+  fdf += 'trailer\r\n<</Root 1 0 R>>\r\n%%EOF\r\n';
+
+  /* Write as Latin-1 bytes to prevent UTF-8 corruption of the binary marker */
+  var bytes = new Uint8Array(fdf.length);
+  for(var i = 0; i < fdf.length; i++) bytes[i] = fdf.charCodeAt(i) & 0xFF;
+
+  var blob = new Blob([bytes], {type: 'application/vnd.fdf'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = pdfFileName.replace(/\.pdf$/i, '') + '_qc.fdf';
+  a.click();
+}
+</script>
+</body>
+</html>
