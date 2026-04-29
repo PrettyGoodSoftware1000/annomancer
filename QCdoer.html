@@ -142,7 +142,7 @@
 
 <a href="index.html" class="back-link">&larr; Back</a>
 <h1>Letterbox QC</h1>
-<p class="subtitle">Find pXY tags in box comments and add them to the boxes as labels</p>
+<p class="subtitle">Find tags in box comments and add them to the boxes as labels</p>
 
 <div class="drop-zone" id="pdfZone">
   <h3>Upload an annotated PDF</h3>
@@ -334,19 +334,63 @@ function parseNumArray(s){
   return nums.length >= 4 ? nums : null;
 }
 
-/* Find pXY tags in text. Returns array of strings in order of appearance.
-   Pattern: 'p' followed by 1+ digits followed by exactly one letter,
-   not followed by a digit or letter. Word boundary on the left.
-   Examples: p1A, p7D, p12D match. p7) p4042 don't (no letter / wrong pattern). */
+/* Find tags in text. Returns array of strings in order of appearance,
+   preserving the original case from the source text.
+   All three patterns are searched case-insensitively.
+
+   Pattern 1 (original): p + 1+ digits + letter
+     e.g. p7A, p12D, P3b
+   Pattern 2 (new): p + letter + dash + 1-4 digits + letter
+     e.g. pL-26A, pX-1234Y — the 'p' is literal, then any letter, dash, number, letter
+     Note: p-26A (no letter after p) does NOT match.
+   Pattern 3 (new): ISI + 1-2 digits + ; + (PPI: or PI:) + pXY
+     e.g. "ISI 8; PPI: p2A", "ISI 12; PI: p5C"
+     The full matched string is inserted (not just the pXY portion).
+
+   Pattern 3 is matched first so the pXY inside it is not double-counted by Pattern 1.
+   Original case is always preserved verbatim. */
 function findTags(text){
   if(!text) return [];
-  var re = /\bp(\d+)([A-Za-z])(?![A-Za-z0-9])/g;
   var matches = [];
+  /* Track character ranges already consumed by a higher-priority pattern
+     so a pXY inside an ISI string does not also appear as a standalone tag. */
+  var consumed = []; /* array of [start, end] inclusive pairs */
   var m;
-  while((m = re.exec(text)) !== null){
-    matches.push('p' + m[1] + m[2].toUpperCase());
+
+  function isConsumed(start, end){
+    for(var i = 0; i < consumed.length; i++){
+      if(start < consumed[i][1] && end > consumed[i][0]) return true;
+    }
+    return false;
   }
-  return matches;
+
+  /* Pattern 3 first: ISI N(N); (PPI|PI): pXY */
+  var re3 = /\b(ISI[ \t]+\d{1,2};[ \t]+(?:PPI|PI):[ \t]+p\d+[A-Za-z])(?![A-Za-z0-9])/gi;
+  while((m = re3.exec(text)) !== null){
+    consumed.push([m.index, m.index + m[0].length]);
+    matches.push({pos: m.index, str: m[1]});
+  }
+
+  /* Pattern 2: pL-NNNA */
+  var re2 = /\b(p[A-Za-z]-\d{1,4}[A-Za-z])(?![A-Za-z0-9])/gi;
+  while((m = re2.exec(text)) !== null){
+    if(!isConsumed(m.index, m.index + m[0].length)){
+      consumed.push([m.index, m.index + m[0].length]);
+      matches.push({pos: m.index, str: m[1]});
+    }
+  }
+
+  /* Pattern 1 (original): pXA — not followed by dash (which would be pattern 2 prefix) */
+  var re1 = /\b(p\d+[A-Za-z])(?![A-Za-z0-9\-])/gi;
+  while((m = re1.exec(text)) !== null){
+    if(!isConsumed(m.index, m.index + m[0].length)){
+      consumed.push([m.index, m.index + m[0].length]);
+      matches.push({pos: m.index, str: m[1]});
+    }
+  }
+
+  matches.sort(function(a, b){ return a.pos - b.pos; });
+  return matches.map(function(x){ return x.str; });
 }
 
 /* ================================================================
