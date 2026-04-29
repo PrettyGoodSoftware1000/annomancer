@@ -262,7 +262,11 @@ async function loadPdf(file){
 
           if(subtype === 'Square'){
             var rect = parseNumArray(raw.Rect);
-            var contents = decodePdfString(stripParens(raw.Contents || ''));
+            /* Use decodePdfStringAny so we handle both literal (parens) and
+               hex (<FEFF...>) UTF-16BE forms — Acrobat often uses the latter
+               for /Contents, which the old stripParens-only path silently
+               failed on, causing tags to be missed. */
+            var contents = decodePdfStringAny(raw.Contents || '');
             var tags = findTags(contents);
             boxes.push({
               page: pi,
@@ -289,6 +293,46 @@ function stripParens(s){
   if(!s) return '';
   if(s.charAt(0) === '(' && s.charAt(s.length-1) === ')') return s.substring(1, s.length-1);
   return s;
+}
+
+/* Decode any PDF string — either literal (parens) or hex (<>) form.
+   Hex strings may be UTF-16BE (with FEFF BOM) or PDFDocEncoding bytes.
+   This is needed because Acrobat frequently writes /Contents as a
+   UTF-16BE hex string — the previous code only handled literal form,
+   which silently broke tag-finding on those annotations. */
+function decodePdfStringAny(s){
+  if(!s) return '';
+  if(s.charAt(0) === '<' && s.charAt(s.length-1) === '>'){
+    return decodeHexString(s.substring(1, s.length-1));
+  }
+  if(s.charAt(0) === '(' && s.charAt(s.length-1) === ')'){
+    return decodePdfString(s.substring(1, s.length-1));
+  }
+  return s;
+}
+
+/* Decode a hex-encoded PDF string body (no surrounding < >).
+   Detects UTF-16BE via the FEFF byte-order mark; otherwise treats
+   each hex pair as a single byte (PDFDocEncoding-ish). */
+function decodeHexString(hex){
+  hex = hex.replace(/\s/g, '');
+  if(hex.length % 2) hex += '0'; /* pad odd-length per PDF spec */
+  /* UTF-16BE if BOM present */
+  if(hex.length >= 4 && hex.substring(0, 4).toUpperCase() === 'FEFF'){
+    var result = '';
+    for(var i = 4; i + 4 <= hex.length; i += 4){
+      var code = parseInt(hex.substring(i, i + 4), 16);
+      if(!isNaN(code)) result += String.fromCharCode(code);
+    }
+    return result;
+  }
+  /* Single-byte fallback */
+  var result = '';
+  for(var i = 0; i + 2 <= hex.length; i += 2){
+    var code = parseInt(hex.substring(i, i + 2), 16);
+    if(!isNaN(code)) result += String.fromCharCode(code);
+  }
+  return result;
 }
 
 /* Decode PDF string escapes: \r \n \t \\ \( \) \nnn (octal) */
