@@ -70,6 +70,20 @@
   }
   .drop-zone .fallback-btn:hover { background:#005fd1; }
 
+  /* Debug drop zone — visually muted to distinguish from primary PDF input */
+  .drop-zone-debug { border-color:#d8d8d8; background:#fafafa; max-width:420px; height:130px; }
+  .drop-zone-debug:hover { border-color:#888; background:#f0f0f0; }
+  .drop-zone-debug.drag-over { border-color:#666; background:#e8e8e8; }
+  .drop-zone-debug.has-file { border-color:#888; background:#e8e8e8; }
+  .drop-zone-debug h3 { color:#666; }
+  .drop-zone-debug .file-name { color:#666; }
+  .debug-badge {
+    display:inline-block; background:#999; color:#fff;
+    font-size:10px; padding:2px 6px; border-radius:3px;
+    margin-left:6px; vertical-align:middle;
+    font-weight:600; letter-spacing:0.5px;
+  }
+
   .panel {
     background: #fff;
     border-radius: 10px;
@@ -153,6 +167,15 @@
   <div class="file-name" id="pdfName"></div>
 </div>
 
+<div class="drop-zone drop-zone-debug" id="fdfZone">
+  <h3>Or upload an FDF <span class="debug-badge">DEBUG</span></h3>
+  <p class="drop-msg">Drop FDF here</p>
+  <p class="drop-msg">or</p>
+  <button class="fallback-btn" onclick="document.getElementById('fdfInput').click()">Select File</button>
+  <input type="file" id="fdfInput" accept=".fdf,application/vnd.fdf" />
+  <div class="file-name" id="fdfName"></div>
+</div>
+
 <div class="panel" id="summaryPanel">
   <h2>Found in Comments</h2>
   <div class="summary-grid" id="summaryGrid"></div>
@@ -208,6 +231,31 @@ var pdfFileName = '';
     var msgs = zone.querySelectorAll('.drop-msg, .fallback-btn');
     for(var i=0;i<msgs.length;i++) msgs[i].style.display='none';
     loadPdf(file);
+  }
+})();
+
+/* FDF drop zone — debug path. Same downstream pipeline as PDF. */
+(function(){
+  var zone = document.getElementById('fdfZone');
+  var input = document.getElementById('fdfInput');
+  var nameEl = document.getElementById('fdfName');
+
+  zone.addEventListener('dragover', function(e){ e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragleave', function(){ zone.classList.remove('drag-over'); });
+  zone.addEventListener('drop', function(e){
+    e.preventDefault(); zone.classList.remove('drag-over');
+    if(e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
+  });
+  zone.addEventListener('click', function(e){ if(e.target.tagName !== 'BUTTON') input.click(); });
+  input.addEventListener('change', function(){ if(this.files[0]) handleFile(this.files[0]); });
+
+  function handleFile(file){
+    zone.classList.add('has-file');
+    nameEl.textContent = file.name;
+    pdfFileName = file.name;
+    var msgs = zone.querySelectorAll('.drop-msg, .fallback-btn');
+    for(var i=0;i<msgs.length;i++) msgs[i].style.display='none';
+    loadFdf(file);
   }
 })();
 
@@ -287,6 +335,253 @@ async function loadPdf(file){
     log('Error: ' + err.message);
     console.error(err);
   }
+}
+
+/* ================================================================
+   LOAD FDF — debug path. Parses an FDF file directly without going
+   through pdf-lib (which only handles full PDFs). Populates the same
+   `boxes` and `allOriginalAnnots` arrays as loadPdf so the rest of
+   the pipeline (preview, FDF download) works identically.
+   ================================================================ */
+async function loadFdf(file){
+  statusEl.textContent = '';
+  log('Loading FDF...');
+  try {
+    var data = new Uint8Array(await file.arrayBuffer());
+    /* Decode as ISO-8859-1 so each byte maps to a single JS char with the
+       same codepoint. This preserves binary marker bytes and hex string
+       content unchanged for downstream text-based parsing. */
+    var text = new TextDecoder('iso-8859-1').decode(data);
+
+    boxes = [];
+    allOriginalAnnots = [];
+
+    var parsed = parseFdfAnnotations(text);
+    log('Parsed ' + parsed.length + ' annotation dict(s) from FDF.');
+
+    for(var k = 0; k < parsed.length; k++){
+      var a = parsed[k];
+      var pageStr = (a.fields.Page || '0').trim();
+      var page = parseInt(pageStr, 10);
+      if(isNaN(page)) page = 0;
+
+      /* Skip Link / Popup the same way the PDF path does later */
+      if(a.subtype === 'Link' || a.subtype === 'Popup'){
+        allOriginalAnnots.push({subtype: a.subtype, fields: a.fields, page: page});
+        continue;
+      }
+
+      allOriginalAnnots.push({subtype: a.subtype, fields: a.fields, page: page});
+
+      if(a.subtype === 'Square'){
+        var rect = parseNumArray(a.fields.Rect);
+        var contents = decodePdfStringAny(a.fields.Contents || '');
+        var tags = findTags(contents);
+        boxes.push({
+          page: page,
+          rect: rect,
+          rectStr: a.fields.Rect,
+          contents: contents,
+          tags: tags,
+          fields: a.fields
+        });
+      }
+    }
+
+    log('Found ' + boxes.length + ' Square box(es), ' + allOriginalAnnots.length + ' total annotation(s).');
+    showResults();
+  } catch(err){
+    log('Error: ' + err.message);
+    console.error(err);
+  }
+}
+
+/* ================================================================
+   FDF TEXT PARSER
+   Walks raw FDF text and pulls out top-level annotation dicts.
+   Properly handles literal strings (with escape sequences and nested
+   parens), hex strings (which may span lines), nested dicts, and
+   arrays — so the parser doesn't get confused by '<<' or '>>' that
+   happen to live inside strings.
+   ================================================================ */
+
+/* List of valid PDF annotation subtypes. Used to filter out non-annot
+   dicts that happen to appear in the FDF (like the root /FDF dict). */
+function isAnnotSubtype(s){
+  var types = ['Square','Circle','Line','FreeText','Highlight','Underline',
+    'StrikeOut','Squiggly','Stamp','Caret','Polygon','PolyLine','Ink','Link',
+    'Popup','FileAttachment','Sound','Text','Widget','Movie','Screen','Redact'];
+  return types.indexOf(s) >= 0;
+}
+
+/* Top-level: find every '<<...>>' dict in the FDF and keep the ones
+   whose /Subtype names a known annotation type. We advance by just past
+   the opening '<<' on each iteration — this lets us descend into nested
+   dicts, which is required because the annotation dicts live inside
+   the FDF root: <</FDF<</Annots[<<annot>><<annot>>]>>>>. */
+function parseFdfAnnotations(text){
+  var results = [];
+  var pos = 0;
+  while(pos < text.length){
+    var openPos = text.indexOf('<<', pos);
+    if(openPos === -1) break;
+
+    var closePos = scanDictEnd(text, openPos + 2);
+    if(closePos === -1){ pos = openPos + 2; continue; }
+
+    var body = text.substring(openPos + 2, closePos);
+    var fields = parseDictBody(body);
+
+    if(fields.Subtype){
+      var stRaw = fields.Subtype.trim();
+      var subtype = stRaw.charAt(0) === '/' ? stRaw.substring(1) : stRaw;
+      if(isAnnotSubtype(subtype)){
+        var clean = {};
+        for(var k in fields){
+          if(k === 'Subtype' || k === 'Type') continue;
+          clean[k] = fields[k];
+        }
+        results.push({subtype: subtype, fields: clean});
+      }
+    }
+
+    /* Advance past the opening '<<' only, so we descend into nested dicts.
+       Also dedupe by tracking which dicts we've already recorded as annots:
+       since each '<<' is a unique position, the same annot won't be found
+       twice. */
+    pos = openPos + 2;
+  }
+  return results;
+}
+
+/* Given an index just past a '<<', walk forward and return the index of
+   the matching '>>' (pointing AT the first '>', not past it). Returns
+   -1 if unmatched. */
+function scanDictEnd(text, start){
+  var depth = 1;
+  var i = start;
+  while(i < text.length){
+    var ch = text[i];
+
+    if(ch === '('){ i = skipLiteralString(text, i); continue; }
+
+    if(ch === '<' && i + 1 < text.length && text[i+1] === '<'){
+      depth++; i += 2; continue;
+    }
+    if(ch === '>' && i + 1 < text.length && text[i+1] === '>'){
+      depth--;
+      if(depth === 0) return i;
+      i += 2; continue;
+    }
+    if(ch === '<'){
+      /* Hex string — skip to matching '>' */
+      var hexEnd = text.indexOf('>', i + 1);
+      i = hexEnd === -1 ? text.length : hexEnd + 1;
+      continue;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/* Given a position pointing at '(', return the index just past the
+   matching ')'. Honors backslash escapes and nested parens (PDF spec
+   allows balanced parens inside literal strings without escaping). */
+function skipLiteralString(text, start){
+  var depth = 1;
+  var i = start + 1;
+  while(i < text.length && depth > 0){
+    var ch = text[i];
+    if(ch === '\\'){ i += 2; continue; }
+    if(ch === '('){ depth++; i++; continue; }
+    if(ch === ')'){ depth--; i++; continue; }
+    i++;
+  }
+  return i;
+}
+
+/* Parse the body of a dict (text between '<<' and '>>') into a key->value
+   map. Values are kept as raw strings, preserving original delimiters
+   (parens for literals, '<...>' for hex, '[...]' for arrays). Names keep
+   their leading slash for downstream consistency. */
+function parseDictBody(body){
+  var fields = {};
+  var i = 0;
+  while(i < body.length){
+    /* Skip whitespace and PDF comments */
+    while(i < body.length){
+      var c = body[i];
+      if(/\s/.test(c)){ i++; continue; }
+      if(c === '%'){
+        while(i < body.length && body[i] !== '\n' && body[i] !== '\r') i++;
+        continue;
+      }
+      break;
+    }
+    if(i >= body.length) break;
+    if(body[i] !== '/'){ i++; continue; }
+
+    /* Read key name */
+    i++;
+    var keyStart = i;
+    while(i < body.length && !/[\s\/<>\[\]\(\)%]/.test(body[i])) i++;
+    var key = body.substring(keyStart, i);
+
+    /* Skip whitespace before the value */
+    while(i < body.length && /\s/.test(body[i])) i++;
+    if(i >= body.length) break;
+
+    var valStart = i;
+    var valEnd = scanValueEnd(body, i);
+    if(valEnd === -1) break;
+    fields[key] = body.substring(valStart, valEnd);
+    i = valEnd;
+  }
+  return fields;
+}
+
+/* Given the start index of a PDF value (literal, hex, dict, array, name,
+   number, etc.), return the index just past its end. */
+function scanValueEnd(text, start){
+  var ch = text[start];
+  if(ch === '('){ return skipLiteralString(text, start); }
+
+  if(ch === '<' && start + 1 < text.length && text[start+1] === '<'){
+    var de = scanDictEnd(text, start + 2);
+    return de === -1 ? -1 : de + 2;
+  }
+  if(ch === '<'){
+    var he = text.indexOf('>', start + 1);
+    return he === -1 ? text.length : he + 1;
+  }
+  if(ch === '['){
+    var depth = 1;
+    var i = start + 1;
+    while(i < text.length && depth > 0){
+      var c = text[i];
+      if(c === '('){ i = skipLiteralString(text, i); continue; }
+      if(c === '<' && text[i+1] === '<'){
+        var de2 = scanDictEnd(text, i + 2);
+        i = de2 === -1 ? text.length : de2 + 2;
+        continue;
+      }
+      if(c === '<'){
+        var he2 = text.indexOf('>', i + 1);
+        i = he2 === -1 ? text.length : he2 + 1;
+        continue;
+      }
+      if(c === '['){ depth++; i++; continue; }
+      if(c === ']'){ depth--; i++; continue; }
+      i++;
+    }
+    return i;
+  }
+
+  /* Name, number, boolean, null, or other simple token */
+  var i = start;
+  if(text[i] === '/') i++;
+  while(i < text.length && !/[\s\/<>\[\]\(\)%]/.test(text[i])) i++;
+  return i;
 }
 
 function stripParens(s){
