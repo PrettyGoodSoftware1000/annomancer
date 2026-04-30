@@ -33,7 +33,73 @@
     padding: 30px;
     max-width: 860px;
     margin: 0 auto;
+    position: relative;
   }
+
+  /* Debug toggle — top-left, gray pill. Toggles body.debug-mode which
+     shows the .debug-only elements (FDF upload zones + extract button). */
+  .debug-toggle {
+    position: absolute;
+    top: 24px;
+    left: 24px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #999;
+    background: transparent;
+    border: 1px solid #ddd;
+    padding: 5px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .debug-toggle:hover { color:#666; border-color:#bbb; }
+  .debug-toggle.active { color:#fff; background:#999; border-color:#999; }
+
+  /* Two-column upload area: left = regular PDF, right = Veeva PDF.
+     Each column stacks its PDF zone, optional extract button, and
+     optional debug FDF zone vertically. */
+  .upload-row {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    align-items: flex-start;
+    margin-bottom: 28px;
+  }
+  .upload-col {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    flex: 1;
+    max-width: 400px;
+  }
+  .upload-col .drop-zone {
+    margin: 0;
+    max-width: 100%;
+  }
+
+  /* Debug-only elements: hidden by default, shown when body.debug-mode */
+  .debug-only { display: none !important; }
+  body.debug-mode .debug-only { display: flex !important; }
+  body.debug-mode .extract-btn { display: block !important; }
+
+  .extract-btn {
+    display: none;
+    width: 100%;
+    padding: 10px 16px;
+    background: #6c757d;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    transition: background 0.15s;
+  }
+  .extract-btn:hover:not(:disabled) { background: #5a6268; }
+  .extract-btn:disabled { background: #ccc; cursor: not-allowed; }
 
   .back-link { display:inline-block; margin-bottom:20px; color:#0078ff; text-decoration:none; }
   .back-link:hover { text-decoration:underline; }
@@ -154,26 +220,58 @@
 
 <div class="page-content">
 
+<button id="debugToggle" class="debug-toggle">debug</button>
+
 <a href="index.html" class="back-link">&larr; Back</a>
 <h1>Letterbox QC</h1>
 <p class="subtitle">Find tags in box comments and add them to the boxes as labels</p>
 
-<div class="drop-zone" id="pdfZone">
-  <h3>Upload an annotated PDF</h3>
-  <p class="drop-msg">Drop PDF here</p>
-  <p class="drop-msg">or</p>
-  <button class="fallback-btn" onclick="document.getElementById('pdfInput').click()">Select File</button>
-  <input type="file" id="pdfInput" accept="application/pdf" />
-  <div class="file-name" id="pdfName"></div>
-</div>
+<div class="upload-row">
 
-<div class="drop-zone drop-zone-debug" id="fdfZone">
-  <h3>Or upload an FDF <span class="debug-badge">DEBUG</span></h3>
-  <p class="drop-msg">Drop FDF here</p>
-  <p class="drop-msg">or</p>
-  <button class="fallback-btn" onclick="document.getElementById('fdfInput').click()">Select File</button>
-  <input type="file" id="fdfInput" accept=".fdf,application/vnd.fdf" />
-  <div class="file-name" id="fdfName"></div>
+  <!-- LEFT COLUMN: regular annotated PDF + (debug) extract button + (debug) regular FDF -->
+  <div class="upload-col">
+    <div class="drop-zone" id="pdfZoneRegular">
+      <h3>Add a regular annotated PDF</h3>
+      <p class="drop-msg">Drop the PDF here</p>
+      <p class="drop-msg">or</p>
+      <button class="fallback-btn" onclick="document.getElementById('pdfInputRegular').click()">Select the File</button>
+      <input type="file" id="pdfInputRegular" accept="application/pdf" />
+      <div class="file-name" id="pdfNameRegular"></div>
+    </div>
+
+    <button id="extractBtn" class="extract-btn" disabled>Extract .fdf</button>
+
+    <div class="drop-zone drop-zone-debug debug-only" id="fdfZoneRegular">
+      <h3>Or upload a regular FDF <span class="debug-badge">DEBUG</span></h3>
+      <p class="drop-msg">Drop FDF here</p>
+      <p class="drop-msg">or</p>
+      <button class="fallback-btn" onclick="document.getElementById('fdfInputRegular').click()">Select File</button>
+      <input type="file" id="fdfInputRegular" accept=".fdf,application/vnd.fdf" />
+      <div class="file-name" id="fdfNameRegular"></div>
+    </div>
+  </div>
+
+  <!-- RIGHT COLUMN: Veeva-exported PDF + (debug) Veeva FDF -->
+  <div class="upload-col">
+    <div class="drop-zone" id="pdfZone">
+      <h3>Use "export annotations" on Veeva Vault, then:</h3>
+      <p class="drop-msg">Drop the PDF here</p>
+      <p class="drop-msg">or</p>
+      <button class="fallback-btn" onclick="document.getElementById('pdfInput').click()">Select the File</button>
+      <input type="file" id="pdfInput" accept="application/pdf" />
+      <div class="file-name" id="pdfName"></div>
+    </div>
+
+    <div class="drop-zone drop-zone-debug debug-only" id="fdfZone">
+      <h3>Or upload a Veeva FDF <span class="debug-badge">DEBUG</span></h3>
+      <p class="drop-msg">Drop FDF here</p>
+      <p class="drop-msg">or</p>
+      <button class="fallback-btn" onclick="document.getElementById('fdfInput').click()">Select File</button>
+      <input type="file" id="fdfInput" accept=".fdf,application/vnd.fdf" />
+      <div class="file-name" id="fdfName"></div>
+    </div>
+  </div>
+
 </div>
 
 <div class="panel" id="summaryPanel">
@@ -207,19 +305,31 @@ function log(msg){ statusEl.style.display='block'; statusEl.textContent+=msg+'\n
 var boxes = [];          /* [{rect, contents, tags, page, originalAnnot, ...}] */
 var allOriginalAnnots = []; /* Every existing annotation, for retention in FDF */
 var pdfFileName = '';
+/* Tracks which input most recently loaded data. The Extract .fdf button
+   sits under the LEFT zone and conceptually extracts FROM the left PDF —
+   so it only enables when that's what's currently loaded. */
+var lastLoadedSource = null; /* 'leftPdf' | 'rightPdf' | 'leftFdf' | 'rightFdf' */
 
-/* Drop zone */
-(function(){
-  var zone = document.getElementById('pdfZone');
-  var input = document.getElementById('pdfInput');
-  var nameEl = document.getElementById('pdfName');
+function updateExtractButton(){
+  var btn = document.getElementById('extractBtn');
+  if(!btn) return;
+  btn.disabled = !(lastLoadedSource === 'leftPdf' && allOriginalAnnots.length > 0);
+}
+
+/* Generic helper: wire a drop zone to a load function. */
+function wireDropZone(opts){
+  var zone = document.getElementById(opts.zoneId);
+  var input = document.getElementById(opts.inputId);
+  var nameEl = document.getElementById(opts.nameId);
 
   zone.addEventListener('dragover', function(e){ e.preventDefault(); zone.classList.add('drag-over'); });
   zone.addEventListener('dragleave', function(){ zone.classList.remove('drag-over'); });
   zone.addEventListener('drop', function(e){
     e.preventDefault(); zone.classList.remove('drag-over');
-    if(e.dataTransfer.files.length > 0 && e.dataTransfer.files[0].type === 'application/pdf')
+    if(e.dataTransfer.files.length > 0){
+      if(opts.acceptPdfOnly && e.dataTransfer.files[0].type !== 'application/pdf') return;
       handleFile(e.dataTransfer.files[0]);
+    }
   });
   zone.addEventListener('click', function(e){ if(e.target.tagName !== 'BUTTON') input.click(); });
   input.addEventListener('change', function(){ if(this.files[0]) handleFile(this.files[0]); });
@@ -230,34 +340,65 @@ var pdfFileName = '';
     pdfFileName = file.name;
     var msgs = zone.querySelectorAll('.drop-msg, .fallback-btn');
     for(var i=0;i<msgs.length;i++) msgs[i].style.display='none';
-    loadPdf(file);
+    lastLoadedSource = opts.sourceTag;
+    /* Pre-emptively disable extract; loadPdf re-enables on success
+       via updateExtractButton() called from showResults. */
+    updateExtractButton();
+    opts.loader(file);
   }
-})();
+}
 
-/* FDF drop zone — debug path. Same downstream pipeline as PDF. */
+/* Right column = Veeva-exported PDF + Veeva FDF (debug). */
+wireDropZone({zoneId:'pdfZone', inputId:'pdfInput', nameId:'pdfName',
+              acceptPdfOnly:true, sourceTag:'rightPdf', loader:loadPdf});
+wireDropZone({zoneId:'fdfZone', inputId:'fdfInput', nameId:'fdfName',
+              acceptPdfOnly:false, sourceTag:'rightFdf', loader:loadFdf});
+
+/* Left column = regular annotated PDF + regular FDF (debug). */
+wireDropZone({zoneId:'pdfZoneRegular', inputId:'pdfInputRegular', nameId:'pdfNameRegular',
+              acceptPdfOnly:true, sourceTag:'leftPdf', loader:loadPdf});
+wireDropZone({zoneId:'fdfZoneRegular', inputId:'fdfInputRegular', nameId:'fdfNameRegular',
+              acceptPdfOnly:false, sourceTag:'leftFdf', loader:loadFdf});
+
+/* Debug toggle: shows/hides the FDF zones and extract button. */
 (function(){
-  var zone = document.getElementById('fdfZone');
-  var input = document.getElementById('fdfInput');
-  var nameEl = document.getElementById('fdfName');
-
-  zone.addEventListener('dragover', function(e){ e.preventDefault(); zone.classList.add('drag-over'); });
-  zone.addEventListener('dragleave', function(){ zone.classList.remove('drag-over'); });
-  zone.addEventListener('drop', function(e){
-    e.preventDefault(); zone.classList.remove('drag-over');
-    if(e.dataTransfer.files.length > 0) handleFile(e.dataTransfer.files[0]);
+  var btn = document.getElementById('debugToggle');
+  btn.addEventListener('click', function(){
+    var on = document.body.classList.toggle('debug-mode');
+    btn.classList.toggle('active', on);
   });
-  zone.addEventListener('click', function(e){ if(e.target.tagName !== 'BUTTON') input.click(); });
-  input.addEventListener('change', function(){ if(this.files[0]) handleFile(this.files[0]); });
-
-  function handleFile(file){
-    zone.classList.add('has-file');
-    nameEl.textContent = file.name;
-    pdfFileName = file.name;
-    var msgs = zone.querySelectorAll('.drop-msg, .fallback-btn');
-    for(var i=0;i<msgs.length;i++) msgs[i].style.display='none';
-    loadFdf(file);
-  }
 })();
+
+/* Extract .fdf — dumps currently-loaded LEFT PDF's annotations to an FDF
+   file. Same FDF emission as downloadFdf() but without the new FreeText
+   labels (this is just an annotation extraction, not a QC pass). */
+document.getElementById('extractBtn').addEventListener('click', function(){
+  if(this.disabled) return;
+  var blocks = [];
+  for(var i = 0; i < allOriginalAnnots.length; i++){
+    var sub = allOriginalAnnots[i].subtype;
+    if(sub === 'Link' || sub === 'Popup') continue;
+    var block = buildExistingAnnotBlock(allOriginalAnnots[i]);
+    if(block) blocks.push(block);
+  }
+
+  var fdf = '%FDF-1.2\r\n%\xe2\xe3\xcf\xd3\r\n';
+  fdf += '1 0 obj\r\n<</FDF<</Annots[';
+  fdf += blocks.join('');
+  fdf += ']>>>>\r\nendobj\r\n';
+  fdf += 'trailer\r\n<</Root 1 0 R>>\r\n%%EOF\r\n';
+
+  /* Latin-1 byte writeout — preserves the binary marker bytes intact. */
+  var bytes = new Uint8Array(fdf.length);
+  for(var i = 0; i < fdf.length; i++) bytes[i] = fdf.charCodeAt(i) & 0xFF;
+
+  var blob = new Blob([bytes], {type: 'application/vnd.fdf'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = pdfFileName.replace(/\.(pdf|fdf)$/i, '') + '_extracted.fdf';
+  a.click();
+});
 
 /* ================================================================
    LOAD PDF + EXTRACT BOXES + FIND pXY TAGS
@@ -844,6 +985,9 @@ function showResults(){
     btn.disabled = false;
     btn.textContent = 'Download QC labels as .fdf';
   }
+  /* Re-evaluate the Extract .fdf button state — only enable when the
+     left PDF is the most recent successful load. */
+  updateExtractButton();
   statusEl.style.display = 'none';
 }
 
