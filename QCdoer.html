@@ -429,10 +429,23 @@ async function loadPdf(file){
           if(!st) continue;
           var subtype = st.toString().replace('/','');
 
-          /* Read all useful fields as raw strings */
+          /* Read all useful fields as raw strings.
+             The list below covers metadata (T, Subj, NM, dates), color/style
+             (C, BC, IC, BS, Border, etc.), and — critically — geometry keys
+             that define the shape of non-Square annotations:
+               L          — Line endpoints [x1 y1 x2 y2]
+               Vertices   — PolyLine / Polygon vertex array
+               QuadPoints — Highlight / Underline / StrikeOut / Squiggly regions
+               InkList    — Ink stroke paths (array of arrays)
+               LE         — Line / PolyLine endings (arrowheads, etc.)
+               Path       — Used by some path-based annot types
+               IT         — Annotation intent (e.g. FreeTextCallout)
+             Without these, lines/polylines/polygons/highlights export as empty
+             bounding boxes — they have a Rect but nothing to draw inside it. */
           var raw = {};
           var fields = ['Contents','T','Subj','NM','M','CreationDate','RC','C','BC',
-            'IC','BS','Border','RD','F','Ff','CA','Popup','Rect','DA','DS','RS'];
+            'IC','BS','Border','RD','F','Ff','CA','Popup','Rect','DA','DS','RS',
+            'L','Vertices','QuadPoints','InkList','LE','Path','IT'];
           for(var f = 0; f < fields.length; f++){
             var v = ad.get(PDFName.of(fields[f]));
             if(v){
@@ -1122,6 +1135,17 @@ function buildExistingAnnotBlock(annot){
   if(f.DA) b += '/DA' + safeVal(f.DA);
   if(f.DS) b += '/DS' + safeVal(f.DS);
   if(f.CA) b += '/CA' + safeVal(f.CA);
+  /* Geometry keys — these define the shape of non-Square annotations.
+     Without them, lines/polylines/polygons/highlights export as empty
+     bounding boxes. Acrobat's native FDF export includes these, and so
+     should we. */
+  if(f.L) b += '/L' + safeVal(f.L);                  /* Line endpoints */
+  if(f.Vertices) b += '/Vertices' + safeVal(f.Vertices);   /* PolyLine/Polygon */
+  if(f.QuadPoints) b += '/QuadPoints' + safeVal(f.QuadPoints); /* Highlight/Underline/StrikeOut/Squiggly */
+  if(f.InkList) b += '/InkList' + safeVal(f.InkList); /* Ink strokes */
+  if(f.LE) b += '/LE' + safeVal(f.LE);               /* Line/PolyLine endings */
+  if(f.Path) b += '/Path' + safeVal(f.Path);         /* Path-based annots */
+  if(f.IT) b += '/IT' + safeVal(f.IT);               /* Intent (e.g. FreeTextCallout) */
   b += '/F ' + fVal;
   if(ffVal !== null) b += '/Ff ' + ffVal;
   /* Note: /Popup is intentionally omitted — popup parents won't survive
