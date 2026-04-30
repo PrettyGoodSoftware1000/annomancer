@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Letterbox QC</title>
+<script src="pdf.js"></script>
 <script src="pdf-lib.min.js"></script>
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -210,6 +211,133 @@
     background:#fff; border-radius:8px; padding:14px;
     box-shadow:0 2px 6px rgba(0,0,0,0.1); white-space:pre-wrap; display:none;
   }
+
+  /* ========== QC MODE (dual-side) ==========
+     Activated when both left and right PDFs/FDFs are loaded. */
+  .qc-action {
+    text-align: center;
+    margin: 10px 0 26px;
+  }
+  .qc-btn {
+    padding: 14px 36px;
+    border-radius: 8px;
+    border: none;
+    font-size: 18px;
+    font-weight: 600;
+    cursor: pointer;
+    color: #fff;
+    background: #911EB4;
+    transition: background 0.15s;
+    display: none;
+  }
+  .qc-btn:hover { background: #6f1690; }
+  .qc-btn:disabled { background: #aaa; cursor: not-allowed; }
+
+  /* Preview canvas — adapted from AnnoVacuum */
+  #qcPreview { display: none; margin: 30px auto; max-width: 1100px; text-align: center; }
+  #qcPreview h2 { font-size: 18px; color: #1a1a2e; margin-bottom: 12px; }
+  #qcPreviewWrap {
+    position: relative;
+    display: inline-block;
+    cursor: crosshair;
+    margin: 0 auto;
+  }
+  #qcPreviewCanvas {
+    border: 1px solid #ccc;
+    box-shadow: 0 0 5px rgba(0,0,0,0.2);
+    display: block;
+  }
+  #qcOverlayCanvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+  }
+  #qcPageNav { margin: 10px 0; }
+  #qcPageNav button {
+    font-size: 13px;
+    padding: 7px 14px;
+    margin: 0 4px;
+    background: #6c757d;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  #qcPageNav button:hover:not(:disabled) { background: #5a6268; }
+  #qcPageNav button:disabled { background: #ccc; cursor: not-allowed; }
+  #qcSelInfo {
+    margin: 10px auto;
+    padding: 10px 14px;
+    max-width: 700px;
+    background: #fff;
+    border-radius: 6px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+    font-size: 13px;
+    text-align: left;
+    display: none;
+  }
+  .qc-sel-swatch {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid #999;
+    vertical-align: middle;
+    margin: 0 4px;
+  }
+  .qc-match-btn {
+    background: #e65100;
+    font-size: 12px;
+    padding: 6px 12px;
+    margin-left: 10px;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  .qc-match-btn:hover { background: #bf360c; }
+
+  /* Comparison panel */
+  #qcCompare { display: none; margin: 30px auto; max-width: 800px; text-align: left; }
+  #qcCompare h2 { font-size: 18px; color: #1a1a2e; margin-bottom: 12px; text-align: center; }
+  .qc-results-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    background: #fff;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  .qc-results-table th {
+    background: #1a1a2e;
+    color: #fff;
+    padding: 10px 14px;
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    text-align: left;
+  }
+  .qc-results-table td {
+    padding: 9px 14px;
+    border-bottom: 1px solid #eee;
+  }
+  .qc-row-match { background: #e8f5e9; }
+  .qc-row-mismatch { background: #ffebee; }
+  .qc-missing { color: #c62828; font-weight: 600; font-style: italic; }
+  .qc-summary {
+    margin-top: 14px;
+    padding: 14px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    font-size: 14px;
+    text-align: center;
+  }
+  .qc-summary-pass { color: #2e7d32; font-weight: 700; }
+  .qc-summary-fail { color: #c62828; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -285,6 +413,34 @@
   <p style="font-size:12px;color:#888;margin-top:10px;">Import this FDF into your PDF to add the labels.</p>
 </div>
 
+<!-- ===== DUAL-SIDE QC MODE ===== -->
+<div class="qc-action">
+  <button id="runQcBtn" class="qc-btn">Run QC (combine + colorize)</button>
+</div>
+
+<div id="qcPreview">
+  <h2>Combined view <span id="qcPageLabel" style="color:#888;font-weight:400;font-size:14px;"></span></h2>
+  <div id="qcPageNav">
+    <button id="qcPrevPageBtn">&larr; Prev</button>
+    <button id="qcNextPageBtn">Next &rarr;</button>
+  </div>
+  <div id="qcSelInfo"></div>
+  <div id="qcPreviewWrap">
+    <canvas id="qcPreviewCanvas"></canvas>
+    <canvas id="qcOverlayCanvas"></canvas>
+  </div>
+  <p style="font-size:12px;color:#888;margin-top:10px;">
+    Click a shape to select. Ctrl/&#8984;+click for multi-select. With a FreeText in the selection, press Space to match colors.
+  </p>
+</div>
+
+<div id="qcCompare"></div>
+
+<div class="panel download-section" id="qcDownloadPanel" style="display:none;">
+  <button class="dl-btn" id="qcDlBtn" style="background:#911EB4;" onclick="downloadCombinedFdf()">Download combined colorized .fdf</button>
+  <p style="font-size:12px;color:#888;margin-top:10px;">Combined: regular annots + Veeva annots (recolored from #9CCBE1) + new Veeva tag labels.</p>
+</div>
+
 <div id="status"></div>
 
 </div>
@@ -310,10 +466,54 @@ var pdfFileName = '';
    so it only enables when that's what's currently loaded. */
 var lastLoadedSource = null; /* 'leftPdf' | 'rightPdf' | 'leftFdf' | 'rightFdf' */
 
+/* ========== DUAL-SIDE QC STATE ==========
+   Left side = regular annotated PDF; right side = Veeva-tagged PDF.
+   Each side stores its own boxes + raw annotation list, populated when
+   that zone is loaded. The original `boxes`/`allOriginalAnnots` globals
+   are preserved (single-side legacy paths still use them). */
+var leftSide = null;   /* {boxes, allAnnots, fileName} */
+var rightSide = null;  /* {boxes, allAnnots, fileName, pdfData (Uint8Array, only if source was a PDF)} */
+
+/* Combined-mode runtime */
+var qcAnnots = [];          /* Final, color-assigned annot objects ready for render+download */
+var qcPreviewPdfData = null;
+var qcPreviewScale = 1.5;
+var qcPreviewPageIdx = 0;
+var qcPreviewNumPages = 0;
+var qcSelected = [];
+
+/* Initialize pdf.js worker (only used in QC preview rendering) */
+if(typeof pdfjsLib !== 'undefined'){
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdf.worker.js';
+}
+
+/* AnnoVacuum's palette — same colors so the visual language matches */
+var QC_PP = [
+  [.9019,.098,.2941],[.2353,.7059,.2941],[.2627,.3882,.8471],[.9608,.5098,.1922],
+  [.5686,.1176,.7059],[.2588,.8314,.9569],[.9412,.1961,.902],[.2745,.6,.5647],
+  [.6039,.3882,.1412],[.502,0,0],[0,0,.4588],[.502,.502,0],
+  [.1294,.5882,.9529],[1,.3412,.1333],[0,.5882,.5333],[.4745,.3333,.2824],
+  [.3765,.4902,.5451],[.5451,.7647,.2902],[1,.5961,0],[.1843,.3098,.3098]
+];
+var QC_PP_NAMES = [
+  "Crimson","Green","Blue","Orange","Purple","Cyan","Magenta","Teal",
+  "Brown","Maroon","Navy","Olive","Sky Blue","Red-Orange","Sea Green",
+  "Taupe","Steel","Lime","Amber","Dark Teal"
+];
+
 function updateExtractButton(){
   var btn = document.getElementById('extractBtn');
   if(!btn) return;
   btn.disabled = !(lastLoadedSource === 'leftPdf' && allOriginalAnnots.length > 0);
+}
+
+function updateRunQcButton(){
+  var btn = document.getElementById('runQcBtn');
+  if(!btn) return;
+  /* Show the button only when both sides have parsed data. */
+  var ok = leftSide && leftSide.allAnnots && leftSide.allAnnots.length > 0 &&
+           rightSide && rightSide.allAnnots && rightSide.allAnnots.length > 0;
+  btn.style.display = ok ? 'inline-block' : 'none';
 }
 
 /* Generic helper: wire a drop zone to a load function. */
@@ -344,7 +544,9 @@ function wireDropZone(opts){
     /* Pre-emptively disable extract; loadPdf re-enables on success
        via updateExtractButton() called from showResults. */
     updateExtractButton();
-    opts.loader(file);
+    /* Side ('left' | 'right') derived from sourceTag prefix. */
+    var side = opts.sourceTag.indexOf('left') === 0 ? 'left' : 'right';
+    opts.loader(file, side);
   }
 }
 
@@ -403,7 +605,7 @@ document.getElementById('extractBtn').addEventListener('click', function(){
 /* ================================================================
    LOAD PDF + EXTRACT BOXES + FIND pXY TAGS
    ================================================================ */
-async function loadPdf(file){
+async function loadPdf(file, side){
   statusEl.textContent = '';
   log('Loading PDF...');
   try {
@@ -487,6 +689,26 @@ async function loadPdf(file){
     }
 
     log('Found ' + boxes.length + ' boxes, ' + allOriginalAnnots.length + ' total annotations.');
+
+    /* Snapshot for dual-side QC mode. Store independently of the global
+       boxes/allOriginalAnnots so the other side's previously-loaded data
+       isn't lost when this side re-loads. */
+    if(side === 'left'){
+      leftSide = {
+        boxes: boxes.slice(),
+        allAnnots: allOriginalAnnots.slice(),
+        fileName: file.name
+      };
+    } else if(side === 'right'){
+      rightSide = {
+        boxes: boxes.slice(),
+        allAnnots: allOriginalAnnots.slice(),
+        fileName: file.name,
+        pdfData: data /* needed for canvas rendering in QC preview */
+      };
+    }
+    updateRunQcButton();
+
     showResults();
   } catch(err){
     log('Error: ' + err.message);
@@ -500,7 +722,7 @@ async function loadPdf(file){
    `boxes` and `allOriginalAnnots` arrays as loadPdf so the rest of
    the pipeline (preview, FDF download) works identically.
    ================================================================ */
-async function loadFdf(file){
+async function loadFdf(file, side){
   statusEl.textContent = '';
   log('Loading FDF...');
   try {
@@ -547,6 +769,26 @@ async function loadFdf(file){
     }
 
     log('Found ' + boxes.length + ' Square box(es), ' + allOriginalAnnots.length + ' total annotation(s).');
+
+    /* Snapshot for dual-side QC mode (same pattern as loadPdf). */
+    if(side === 'left'){
+      leftSide = {
+        boxes: boxes.slice(),
+        allAnnots: allOriginalAnnots.slice(),
+        fileName: file.name
+      };
+    } else if(side === 'right'){
+      /* Note: FDF-only right side won't have pdfData, so canvas preview
+         won't work — but the merge + comparison + FDF download still do. */
+      rightSide = {
+        boxes: boxes.slice(),
+        allAnnots: allOriginalAnnots.slice(),
+        fileName: file.name,
+        pdfData: (rightSide && rightSide.pdfData) ? rightSide.pdfData : null
+      };
+    }
+    updateRunQcButton();
+
     showResults();
   } catch(err){
     log('Error: ' + err.message);
@@ -1190,6 +1432,752 @@ function downloadFdf(){
   var a = document.createElement('a');
   a.href = url;
   a.download = pdfFileName.replace(/\.pdf$/i, '') + '_qc.fdf';
+  a.click();
+}
+
+/* ================================================================
+   ====== DUAL-SIDE QC: MERGE, COLORIZE, RENDER, COMPARE ==========
+   When both left (regular) and right (Veeva) sides are loaded, the
+   "Run QC" button drives:
+     1. Merge: pull both sides' annotations into one tagged list.
+     2. Colorize: group Squares by significant overlap (IoU); each
+        group gets one palette color. FreeTexts join via line endpoint
+        match (AnnoVacuum's heuristic) or direct overlap with a Square
+        in the group. Lines join via endpoint-on-Square.
+     3. Generate Veeva tag labels: for every Veeva Square whose
+        /Contents has tag matches, build a small FreeText label using
+        the existing buildFreeTextLabel; color it to match its group.
+     4. Render: page-by-page canvas of the right (Veeva) PDF with a
+        colored overlay drawn on top.
+     5. Click + Space: same UX as AnnoVacuum, except text inside
+        FreeTexts is NEVER recolored — only the border (BC/colorBC).
+     6. Compare: tally tags from left vs right and show match/mismatch.
+     7. Download: combined FDF with all annots + new labels.
+   ================================================================ */
+
+/* Parse an array string like "[1 0 0]" or "[1 0 0 1]" into a numeric
+   array. Used for color triplets/quads. parseNumArray() requires len>=4
+   (it's specialized for Rect), so this is the color-friendly variant. */
+function qcParseColorArray(s){
+  if(!s) return null;
+  var clean = s.replace(/[\[\]]/g,'').trim();
+  if(!clean) return null;
+  var parts = clean.split(/\s+/);
+  var nums = [];
+  for(var i = 0; i < parts.length; i++){
+    var n = parseFloat(parts[i]);
+    if(!isNaN(n)) nums.push(n);
+  }
+  return nums.length >= 3 ? nums : null;
+}
+
+/* IoU between two PDF rects [x1 y1 x2 y2]. PDF rects can have any
+   corner ordering, so normalize to (left, bottom, right, top) first. */
+function qcRectIoU(a, b){
+  if(!a || !b || a.length < 4 || b.length < 4) return 0;
+  var aL = Math.min(a[0],a[2]), aR = Math.max(a[0],a[2]);
+  var aB = Math.min(a[1],a[3]), aT = Math.max(a[1],a[3]);
+  var bL = Math.min(b[0],b[2]), bR = Math.max(b[0],b[2]);
+  var bB = Math.min(b[1],b[3]), bT = Math.max(b[1],b[3]);
+  var iL = Math.max(aL,bL), iR = Math.min(aR,bR);
+  var iB = Math.max(aB,bB), iT = Math.min(aT,bT);
+  if(iR <= iL || iT <= iB) return 0;
+  var inter = (iR-iL)*(iT-iB);
+  var aArea = (aR-aL)*(aT-aB);
+  var bArea = (bR-bL)*(bT-bB);
+  var uni = aArea + bArea - inter;
+  return uni > 0 ? inter / uni : 0;
+}
+
+/* Returns true if a point lies on (or within `tol` of) the perimeter of
+   a rect — used for matching line endpoints to Squares. Mirrors
+   AnnoVacuum's `pnr` helper. */
+function qcOnRectPerimeter(px, py, l, b, r, t, tol){
+  if(px < l - tol || px > r + tol || py < b - tol || py > t + tol) return false;
+  var iY = py >= b - tol && py <= t + tol;
+  var iX = px >= l - tol && px <= r + tol;
+  return (Math.abs(px - l) <= tol && iY) ||
+         (Math.abs(px - r) <= tol && iY) ||
+         (Math.abs(py - b) <= tol && iX) ||
+         (Math.abs(py - t) <= tol && iX);
+}
+
+/* Sync each synthesized qcLabel's border color (colorBC) to the current
+   color of its parent Square. Called after the initial auto-color pass
+   and any time the user manually re-matches via Space bar so labels
+   stay visually tied to their parent boxes. */
+function qcSyncLabelColors(){
+  for(var i = 0; i < qcAnnots.length; i++){
+    var a = qcAnnots[i];
+    if(a.src !== 'qcLabel') continue;
+    if(typeof a.parentSquareIdx !== 'number') continue;
+    var parent = qcAnnots[a.parentSquareIdx];
+    if(parent && parent.colorC) a.colorBC = parent.colorC.slice();
+  }
+}
+
+/* Build the merged annotation list from leftSide + rightSide, normalized
+   to a uniform shape used by the renderer/downloader. Each entry:
+     { src: 'left'|'right'|'qcLabel', subtype, page, rect, endpoints?,
+       contents, tags, fields (raw original PDF strings),
+       colorC, colorBC, group: -1 (assigned later) }
+   Colors are extracted from the original PDF colors, then OVERRIDDEN
+   by group color during assignment. */
+function qcBuildMerged(){
+  var out = [];
+  function pushFrom(side, srcTag){
+    if(!side) return;
+    for(var i = 0; i < side.allAnnots.length; i++){
+      var a = side.allAnnots[i];
+      var sub = a.subtype;
+      if(sub === 'Link' || sub === 'Popup') continue;
+      var f = a.fields || {};
+      var rect = parseNumArray(f.Rect);
+      if(!rect) continue;
+      var entry = {
+        src: srcTag,
+        subtype: sub,
+        page: a.page,
+        rect: rect,
+        fields: f,            /* raw strings — preserved for FDF emission */
+        contents: stripInvisibles(decodePdfStringAny(f.Contents || '')),
+        tags: [],
+        colorC: qcParseColorArray(f.C),
+        colorBC: qcParseColorArray(f.BC),
+        group: -1
+      };
+      /* Find tags only in box-shaped annotations (Square + FreeText).
+         FreeText too because regular annotations sometimes carry labels
+         in a FreeText's text rather than a Square's comment. */
+      if(sub === 'Square' || sub === 'FreeText'){
+        entry.tags = findTags(entry.contents);
+      }
+      if(sub === 'Line'){
+        var ep = parseNumArray(f.L);
+        if(ep && ep.length >= 4) entry.endpoints = ep;
+      }
+      out.push(entry);
+    }
+  }
+  pushFrom(leftSide, 'left');
+  pushFrom(rightSide, 'right');
+  return out;
+}
+
+/* Group Squares (across both sides) by significant rect overlap on
+   the same page. Returns array-of-arrays: each inner array is the list
+   of indices into `annots` belonging to one group. Threshold is IoU
+   ≥ 0.30 — chosen to handle slightly different rect sizes between
+   Acrobat-drawn and Veeva-auto-placed boxes around the same content. */
+function qcGroupSquaresByOverlap(annots){
+  var sqIdx = [];
+  for(var i = 0; i < annots.length; i++){
+    if(annots[i].subtype === 'Square') sqIdx.push(i);
+  }
+  /* Union-Find */
+  var parent = sqIdx.map(function(_, i){ return i; });
+  function find(x){ while(parent[x] !== x){ parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+  function union(a, b){ var ra = find(a), rb = find(b); if(ra !== rb) parent[ra] = rb; }
+
+  var THRESH = 0.30;
+  for(var i = 0; i < sqIdx.length; i++){
+    for(var j = i + 1; j < sqIdx.length; j++){
+      var A = annots[sqIdx[i]], B = annots[sqIdx[j]];
+      if(A.page !== B.page) continue;
+      if(qcRectIoU(A.rect, B.rect) >= THRESH) union(i, j);
+    }
+  }
+  var groupsMap = {};
+  for(var i = 0; i < sqIdx.length; i++){
+    var r = find(i);
+    if(!groupsMap[r]) groupsMap[r] = [];
+    groupsMap[r].push(sqIdx[i]);
+  }
+  var groups = [];
+  for(var k in groupsMap) groups.push(groupsMap[k]);
+  return groups;
+}
+
+/* Connect each FreeText (and Line) on each page to its best-matching
+   Square group. Mirrors AnnoVacuum's matching:
+     - FreeText with line endpoint touching a Square → joins that group
+     - FreeText overlapping a Square's rect → joins that group
+     - Line with both endpoints near Squares → joins their group
+   Mutates entries' `.group` field. */
+function qcAttachOthersToGroups(annots, groups){
+  /* Build squareIdx → groupIdx map */
+  var sqToGroup = {};
+  for(var g = 0; g < groups.length; g++){
+    for(var i = 0; i < groups[g].length; i++){
+      sqToGroup[groups[g][i]] = g;
+      annots[groups[g][i]].group = g;
+    }
+  }
+
+  /* First pass: Lines. Endpoint within 15pt of a Square perimeter
+     (matches AnnoVacuum's tolerance). Track which group(s) a line
+     touches; if it bridges two groups, prefer the side it began at
+     (left side's line stays with left side's matching group). */
+  for(var i = 0; i < annots.length; i++){
+    var a = annots[i];
+    if(a.subtype !== 'Line' || !a.endpoints || a.endpoints.length < 4) continue;
+    var ep = a.endpoints;
+    var bestG = -1, bestD = 1e9;
+    for(var sIdx in sqToGroup){
+      var sIdxN = +sIdx;
+      var sq = annots[sIdxN];
+      if(sq.page !== a.page) continue;
+      var sL = Math.min(sq.rect[0],sq.rect[2]),sR = Math.max(sq.rect[0],sq.rect[2]);
+      var sB = Math.min(sq.rect[1],sq.rect[3]),sT = Math.max(sq.rect[1],sq.rect[3]);
+      var e1 = qcOnRectPerimeter(ep[0],ep[1],sL,sB,sR,sT,15);
+      var e2 = qcOnRectPerimeter(ep[2],ep[3],sL,sB,sR,sT,15);
+      if(e1 || e2){
+        var cx = (sL+sR)/2, cy = (sB+sT)/2;
+        var d = e1 ? Math.hypot(ep[0]-cx,ep[1]-cy) : Math.hypot(ep[2]-cx,ep[3]-cy);
+        if(d < bestD){ bestD = d; bestG = sqToGroup[sIdx]; }
+      }
+    }
+    if(bestG >= 0) a.group = bestG;
+  }
+
+  /* Second pass: FreeTexts. Try line connection first, then direct rect
+     overlap with a Square in a group. */
+  for(var i = 0; i < annots.length; i++){
+    var ft = annots[i];
+    if(ft.subtype !== 'FreeText') continue;
+
+    /* Look for a Line that connects to this FreeText AND has a group. */
+    var ftL = Math.min(ft.rect[0],ft.rect[2]), ftR = Math.max(ft.rect[0],ft.rect[2]);
+    var ftB = Math.min(ft.rect[1],ft.rect[3]), ftT = Math.max(ft.rect[1],ft.rect[3]);
+    var connectedG = -1;
+    for(var li = 0; li < annots.length; li++){
+      var ln = annots[li];
+      if(ln.subtype !== 'Line' || ln.page !== ft.page) continue;
+      if(ln.group < 0 || !ln.endpoints) continue;
+      var ep = ln.endpoints;
+      /* Endpoint inside the FreeText rect (with 20pt tolerance) → match. */
+      var inFT = function(x, y){ return qcOnRectPerimeter(x,y,ftL,ftB,ftR,ftT,20) ||
+        (x >= ftL-20 && x <= ftR+20 && y >= ftB-20 && y <= ftT+20); };
+      if(inFT(ep[0],ep[1]) || inFT(ep[2],ep[3])){ connectedG = ln.group; break; }
+    }
+
+    if(connectedG >= 0){ ft.group = connectedG; continue; }
+
+    /* Fallback: direct overlap with any Square in a group. Pick the
+       group whose Square has the highest IoU with the FreeText. */
+    var bestG = -1, bestI = 0;
+    for(var sIdx in sqToGroup){
+      var sIdxN = +sIdx;
+      var sq = annots[sIdxN];
+      if(sq.page !== ft.page) continue;
+      var iou = qcRectIoU(ft.rect, sq.rect);
+      if(iou > 0.05 && iou > bestI){ bestI = iou; bestG = sqToGroup[sIdx]; }
+    }
+    if(bestG >= 0) ft.group = bestG;
+  }
+}
+
+/* Assign palette colors to groups. Singletons (1 Square only) still get
+   a unique color so visually distinguishable. Annotations with group ===
+   -1 keep their original colors. */
+function qcAssignGroupColors(annots, groups){
+  for(var g = 0; g < groups.length; g++){
+    var color = QC_PP[g % QC_PP.length];
+    for(var i = 0; i < annots.length; i++){
+      if(annots[i].group !== g) continue;
+      var a = annots[i];
+      if(a.subtype === 'FreeText'){
+        a.colorBC = color.slice();
+        /* Per requirement: do NOT recolor the text inside FreeText
+           boxes. Leave fields.DA, fields.DS, fields.RC alone. */
+      } else {
+        a.colorC = color.slice();
+      }
+    }
+  }
+}
+
+/* For each Veeva Square whose contents had tags, synthesize a FreeText
+   label entry and append to `annots`. Color matches the parent Square's
+   group. Reuses existing buildFreeTextLabel for the FDF output side
+   (called later at download time). */
+function qcGenerateVeevaQCLabels(annots){
+  var added = [];
+  for(var i = 0; i < annots.length; i++){
+    var a = annots[i];
+    if(a.src !== 'right') continue;
+    if(a.subtype !== 'Square') continue;
+    if(!a.tags || !a.tags.length) continue;
+
+    /* Build a label rect inside the Square's upper-left corner — matches
+       buildFreeTextLabel's geometry so display + download agree. */
+    var x1 = Math.min(a.rect[0], a.rect[2]);
+    var y1 = Math.min(a.rect[1], a.rect[3]);
+    var x2 = Math.max(a.rect[0], a.rect[2]);
+    var y2 = Math.max(a.rect[1], a.rect[3]);
+    var tagText = a.tags.join(', ');
+    var labelW = Math.min(x2-x1, Math.max(40, tagText.length * 6 + 8));
+    var labelH = 14;
+    var labelX1 = x1, labelY2 = y2, labelY1 = labelY2 - labelH, labelX2 = labelX1 + labelW;
+
+    /* Color inherited from parent Square's group. */
+    var col = a.group >= 0 ? QC_PP[a.group % QC_PP.length].slice() : null;
+
+    added.push({
+      src: 'qcLabel',
+      subtype: 'FreeText',
+      page: a.page,
+      rect: [labelX1, labelY1, labelX2, labelY2],
+      fields: {},   /* synthesized — no original raw fields */
+      contents: tagText,
+      tags: [],
+      colorC: [1,1,1],          /* white background fill */
+      colorBC: col || [0,0,0],  /* border = group color (or black) */
+      group: a.group,
+      parentSquareIdx: i,
+      parentRect: a.rect.slice(), /* parent's rect, used by buildFreeTextLabel at emit time */
+      tagText: tagText          /* kept verbatim for FDF emission */
+    });
+  }
+  for(var k = 0; k < added.length; k++) annots.push(added[k]);
+}
+
+/* ===== RUN QC entry ===== */
+document.getElementById('runQcBtn').addEventListener('click', async function(){
+  var btn = this;
+  btn.disabled = true; btn.textContent = 'Working...';
+  statusEl.style.display = 'block';
+  statusEl.textContent = 'Merging annotations...\n';
+  document.getElementById('qcPreview').style.display = 'none';
+  document.getElementById('qcCompare').style.display = 'none';
+  document.getElementById('qcDownloadPanel').style.display = 'none';
+  /* Hide the single-side panels — they'd confuse next to the new view. */
+  document.getElementById('summaryPanel').classList.remove('visible');
+  document.getElementById('downloadPanel').classList.remove('visible');
+
+  try {
+    qcAnnots = qcBuildMerged();
+    statusEl.textContent += 'Merged ' + qcAnnots.length + ' annotations '
+      + '(' + leftSide.allAnnots.length + ' left + ' + rightSide.allAnnots.length + ' right).\n';
+
+    statusEl.textContent += 'Grouping by overlap...\n';
+    var groups = qcGroupSquaresByOverlap(qcAnnots);
+    statusEl.textContent += 'Found ' + groups.length + ' Square group(s).\n';
+
+    qcAttachOthersToGroups(qcAnnots, groups);
+    qcAssignGroupColors(qcAnnots, groups);
+    qcGenerateVeevaQCLabels(qcAnnots);
+    qcSyncLabelColors();
+
+    statusEl.textContent += 'Rendering preview...\n';
+    if(rightSide.pdfData){
+      qcPreviewPdfData = rightSide.pdfData;
+      var pj = await pdfjsLib.getDocument({data: qcPreviewPdfData}).promise;
+      qcPreviewNumPages = pj.numPages;
+      qcPreviewPageIdx = 0;
+      qcSelected = [];
+      await qcRenderPreviewPage();
+      document.getElementById('qcPreview').style.display = 'block';
+    } else {
+      statusEl.textContent += '(Right side is FDF only — preview canvas skipped, but FDF download still works.)\n';
+    }
+
+    qcShowComparison();
+    document.getElementById('qcDownloadPanel').style.display = 'block';
+    statusEl.textContent += 'Done.\n';
+  } catch(err){
+    statusEl.textContent += '\nError: ' + err.message;
+    console.error(err);
+  }
+  btn.disabled = false;
+  btn.textContent = 'Run QC (combine + colorize)';
+});
+
+/* ===== PREVIEW RENDERING ===== */
+async function qcRenderPreviewPage(){
+  var pj = await pdfjsLib.getDocument({data: qcPreviewPdfData}).promise;
+  var pg = await pj.getPage(qcPreviewPageIdx + 1);
+  var vp = pg.getViewport({scale: qcPreviewScale});
+  var c = document.getElementById('qcPreviewCanvas');
+  var ctx = c.getContext('2d');
+  c.width = vp.width; c.height = vp.height;
+  var o = document.getElementById('qcOverlayCanvas');
+  o.width = vp.width; o.height = vp.height;
+  /* annotationMode 0 = NONE — draw the page without Veeva's own annot rendering,
+     so our overlay isn't competing with default boxes. */
+  await pg.render({canvasContext: ctx, viewport: vp, annotationMode: 0}).promise;
+  document.getElementById('qcPageLabel').textContent =
+    '(Page ' + (qcPreviewPageIdx + 1) + ' of ' + qcPreviewNumPages + ')';
+  /* Disable nav buttons at boundaries */
+  document.getElementById('qcPrevPageBtn').disabled = qcPreviewPageIdx === 0;
+  document.getElementById('qcNextPageBtn').disabled = qcPreviewPageIdx >= qcPreviewNumPages - 1;
+  qcDrawOverlays();
+}
+
+function qcRgbToHex(c){
+  if(!c || c.length < 3) return '#cccccc';
+  return '#' + c.map(function(v){
+    return Math.round(v*255).toString(16).padStart(2,'0');
+  }).join('');
+}
+
+function qcGetColorName(c){
+  if(!c || c.length < 3) return '';
+  for(var i = 0; i < QC_PP.length; i++){
+    if(Math.abs(c[0]-QC_PP[i][0]) < 0.02 &&
+       Math.abs(c[1]-QC_PP[i][1]) < 0.02 &&
+       Math.abs(c[2]-QC_PP[i][2]) < 0.02) return QC_PP_NAMES[i];
+  }
+  return qcRgbToHex(c);
+}
+
+function qcDrawOverlays(){
+  var o = document.getElementById('qcOverlayCanvas');
+  var ctx = o.getContext('2d');
+  ctx.clearRect(0, 0, o.width, o.height);
+  var S = qcPreviewScale;
+  var pH = document.getElementById('qcPreviewCanvas').height / S;
+
+  for(var ai = 0; ai < qcAnnots.length; ai++){
+    var a = qcAnnots[ai];
+    if(a.page !== qcPreviewPageIdx) continue;
+    var r = a.rect;
+    var rL = Math.min(r[0],r[2]), rR = Math.max(r[0],r[2]);
+    var rB = Math.min(r[1],r[3]), rT = Math.max(r[1],r[3]);
+    var cx = rL*S, cy = (pH-rT)*S, cw = (rR-rL)*S, ch = (rT-rB)*S;
+    var col = a.subtype === 'FreeText' ? (a.colorBC || a.colorC) : (a.colorC || a.colorBC);
+    var hex = col ? qcRgbToHex(col) : '#999999';
+    var sel = qcSelected.indexOf(ai) >= 0;
+
+    if(a.subtype === 'Line' && a.endpoints && a.endpoints.length >= 4){
+      var ep = a.endpoints;
+      ctx.strokeStyle = hex; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(ep[0]*S, (pH-ep[1])*S);
+      ctx.lineTo(ep[2]*S, (pH-ep[3])*S);
+      ctx.stroke();
+      if(sel){
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
+        ctx.beginPath();
+        ctx.moveTo(ep[0]*S, (pH-ep[1])*S);
+        ctx.lineTo(ep[2]*S, (pH-ep[3])*S);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    } else if(a.subtype === 'Square'){
+      ctx.strokeStyle = hex; ctx.lineWidth = 2;
+      ctx.strokeRect(cx, cy, cw, ch);
+      ctx.fillStyle = hex + '15'; /* 8% alpha */
+      ctx.fillRect(cx, cy, cw, ch);
+      /* Tiny source label in bottom-right */
+      ctx.font = '9px sans-serif'; ctx.fillStyle = hex;
+      var tag = a.src === 'right' ? 'V' : 'R';
+      var nm = qcGetColorName(col);
+      var label = nm ? (tag + '·' + nm) : tag;
+      var tw = ctx.measureText(label).width;
+      ctx.fillText(label, cx + cw - tw - 3, cy + ch - 4);
+      if(sel){
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
+        ctx.strokeRect(cx, cy, cw, ch);
+        ctx.setLineDash([]);
+      }
+    } else if(a.subtype === 'FreeText'){
+      /* Slightly translucent white background so underlying page shows through. */
+      ctx.fillStyle = '#ffffffd0';
+      ctx.fillRect(cx, cy, cw, ch);
+      ctx.strokeStyle = hex; ctx.lineWidth = 2;
+      ctx.strokeRect(cx, cy, cw, ch);
+      /* Text rendered in a neutral color — per requirement, FreeText
+         text color is NOT changed by the colorizer. We draw it black-ish
+         for legibility on the canvas; actual stored colors stay original. */
+      ctx.fillStyle = '#222';
+      ctx.font = '10px sans-serif';
+      var txt = a.contents || a.tagText || '';
+      ctx.fillText(txt.substring(0, 60), cx + 3, cy + 13);
+      if(txt.length > 60) ctx.fillText(txt.substring(60, 120), cx + 3, cy + 25);
+      if(sel){
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
+        ctx.strokeRect(cx, cy, cw, ch);
+        ctx.setLineDash([]);
+      }
+    }
+  }
+}
+
+/* ===== CLICK SELECTION ===== */
+function qcDistToSegment(px,py,x1,y1,x2,y2){
+  var dx = x2-x1, dy = y2-y1, l2 = dx*dx + dy*dy;
+  if(!l2) return Math.hypot(px-x1, py-y1);
+  var t = ((px-x1)*dx + (py-y1)*dy) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1+t*dx), py - (y1+t*dy));
+}
+
+document.getElementById('qcPreviewWrap').addEventListener('click', function(e){
+  if(!qcAnnots.length) return;
+  var c = document.getElementById('qcPreviewCanvas');
+  var br = c.getBoundingClientRect();
+  var S = qcPreviewScale, pH = c.height / S;
+  var pX = (e.clientX - br.left) / S;
+  var pY = pH - (e.clientY - br.top) / S;
+  var bestI = -1, bestArea = 1e9;
+  for(var ai = 0; ai < qcAnnots.length; ai++){
+    var a = qcAnnots[ai];
+    if(a.page !== qcPreviewPageIdx) continue;
+    if(a.subtype === 'Line' && a.endpoints && a.endpoints.length >= 4){
+      if(qcDistToSegment(pX,pY,a.endpoints[0],a.endpoints[1],a.endpoints[2],a.endpoints[3]) < 8 && 50 < bestArea){
+        bestArea = 50; bestI = ai;
+      }
+    } else {
+      var r = a.rect;
+      var P = 3;
+      var rL = Math.min(r[0],r[2]), rR = Math.max(r[0],r[2]);
+      var rB = Math.min(r[1],r[3]), rT = Math.max(r[1],r[3]);
+      if(pX >= rL-P && pX <= rR+P && pY >= rB-P && pY <= rT+P){
+        var ar = (rR-rL)*(rT-rB);
+        if(ar < bestArea){ bestArea = ar; bestI = ai; }
+      }
+    }
+  }
+  if(bestI >= 0){
+    if(e.ctrlKey || e.metaKey){
+      var existing = qcSelected.indexOf(bestI);
+      if(existing >= 0) qcSelected.splice(existing, 1);
+      else qcSelected.push(bestI);
+    } else {
+      qcSelected = [bestI];
+    }
+  } else {
+    qcSelected = [];
+  }
+  qcDrawOverlays();
+  qcUpdateSelInfo();
+});
+
+function qcUpdateSelInfo(){
+  var info = document.getElementById('qcSelInfo');
+  if(!qcSelected.length){ info.style.display = 'none'; return; }
+  info.style.display = 'block';
+  var html = '<b>Selected:</b> ';
+  /* Find a FreeText in selection — that's the color anchor for matching. */
+  var ftIdx;
+  for(var i = 0; i < qcSelected.length; i++){
+    if(qcAnnots[qcSelected[i]].subtype === 'FreeText'){ ftIdx = qcSelected[i]; break; }
+  }
+  for(var i = 0; i < qcSelected.length; i++){
+    var ai = qcSelected[i], a = qcAnnots[ai];
+    var col = a.subtype === 'FreeText' ? (a.colorBC || a.colorC) : a.colorC;
+    var srcLabel = a.src === 'right' ? '[V]' : (a.src === 'qcLabel' ? '[QC]' : '[R]');
+    html += '<span class="qc-sel-swatch" style="background:' + (col ? qcRgbToHex(col) : '#ccc') + '"></span>'
+          + a.subtype + srcLabel + ' ';
+  }
+  if(ftIdx !== undefined && qcSelected.length > 1){
+    html += '<button class="qc-match-btn" onclick="qcMatchToFT(' + ftIdx + ')">Match colors to FreeText (Space)</button>';
+  } else if(ftIdx !== undefined){
+    html += '<span style="color:#888;margin-left:10px;">Ctrl/&#8984;+click more annotations to match</span>';
+  } else {
+    html += '<span style="color:#888;margin-left:10px;">Include a FreeText in selection to match colors</span>';
+  }
+  info.innerHTML = html;
+}
+
+function qcMatchToFT(ftIdx){
+  var target = qcAnnots[ftIdx].colorBC || qcAnnots[ftIdx].colorC;
+  if(!target) return;
+  for(var i = 0; i < qcSelected.length; i++){
+    var ai = qcSelected[i];
+    if(ai === ftIdx) continue;
+    var a = qcAnnots[ai];
+    if(a.subtype === 'FreeText') a.colorBC = target.slice();
+    else a.colorC = target.slice();
+  }
+  qcSyncLabelColors();
+  qcDrawOverlays();
+  qcUpdateSelInfo();
+}
+
+document.addEventListener('keydown', function(e){
+  if(e.code !== 'Space') return;
+  if(document.getElementById('qcPreview').style.display === 'none') return;
+  if(!qcSelected.length) return;
+  /* Don't steal Space from inputs */
+  var t = e.target;
+  if(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  e.preventDefault();
+  var fi;
+  for(var i = 0; i < qcSelected.length; i++){
+    if(qcAnnots[qcSelected[i]].subtype === 'FreeText'){ fi = qcSelected[i]; break; }
+  }
+  if(fi !== undefined) qcMatchToFT(fi);
+});
+
+document.getElementById('qcPrevPageBtn').addEventListener('click', async function(){
+  if(qcPreviewPageIdx > 0){
+    qcPreviewPageIdx--; qcSelected = [];
+    await qcRenderPreviewPage();
+    qcUpdateSelInfo();
+  }
+});
+document.getElementById('qcNextPageBtn').addEventListener('click', async function(){
+  if(qcPreviewPageIdx < qcPreviewNumPages - 1){
+    qcPreviewPageIdx++; qcSelected = [];
+    await qcRenderPreviewPage();
+    qcUpdateSelInfo();
+  }
+});
+
+/* ===== TAG COMPARISON =====
+   For each tag found in either side, show side-by-side counts. Counts
+   are aggregated across BOTH Square and FreeText annotations on each
+   side so a tag in a regular FreeText still gets counted. */
+function qcShowComparison(){
+  var leftCounts = {}, rightCounts = {};
+  for(var i = 0; i < qcAnnots.length; i++){
+    var a = qcAnnots[i];
+    if(a.src === 'qcLabel') continue;       /* skip our synthetic labels */
+    if(!a.tags || !a.tags.length) continue;
+    var bucket = a.src === 'left' ? leftCounts : rightCounts;
+    for(var t = 0; t < a.tags.length; t++){
+      var k = a.tags[t];
+      bucket[k] = (bucket[k] || 0) + 1;
+    }
+  }
+  /* Union of tag keys, sorted: simple alpha-num ordering. Tries to put
+     pXY first (numeric sort), then patterns 2 & 3. */
+  var allTags = {};
+  for(var k in leftCounts) allTags[k] = true;
+  for(var k in rightCounts) allTags[k] = true;
+  var sorted = Object.keys(allTags).sort(function(a, b){
+    var ma = a.match(/^p(\d+)([A-Za-z])$/);
+    var mb = b.match(/^p(\d+)([A-Za-z])$/);
+    if(ma && mb){
+      if(ma[2].toUpperCase() !== mb[2].toUpperCase()) return ma[2].toUpperCase().localeCompare(mb[2].toUpperCase());
+      return parseInt(ma[1]) - parseInt(mb[1]);
+    }
+    if(ma) return -1;
+    if(mb) return 1;
+    return a.localeCompare(b);
+  });
+
+  var matchCount = 0, mismatchCount = 0;
+  var html = '<h2>Tag Comparison</h2>';
+  html += '<table class="qc-results-table">';
+  html += '<tr><th>Tag</th><th>Regular (left)</th><th>Veeva (right)</th><th></th></tr>';
+  for(var i = 0; i < sorted.length; i++){
+    var tag = sorted[i];
+    var lc = leftCounts[tag] || 0, rc = rightCounts[tag] || 0;
+    var match = (lc === rc && lc > 0);
+    if(match) matchCount++; else mismatchCount++;
+    var lCell = lc > 0 ? (lc + (lc === 1 ? ' time' : ' times')) : '<span class="qc-missing">missing</span>';
+    var rCell = rc > 0 ? (rc + (rc === 1 ? ' time' : ' times')) : '<span class="qc-missing">missing</span>';
+    var icon = match ? '&check;' : '&cross;';
+    html += '<tr class="' + (match ? 'qc-row-match' : 'qc-row-mismatch') + '">';
+    html += '<td><strong>' + escHtml(tag) + '</strong></td>';
+    html += '<td>' + lCell + '</td>';
+    html += '<td>' + rCell + '</td>';
+    html += '<td>' + icon + '</td>';
+    html += '</tr>';
+  }
+  html += '</table>';
+  html += '<div class="qc-summary">';
+  if(sorted.length === 0){
+    html += 'No tags found in either side.';
+  } else if(mismatchCount === 0){
+    html += '<span class="qc-summary-pass">All ' + sorted.length + ' tags match between both sides.</span>';
+  } else {
+    html += '<span class="qc-summary-pass">' + matchCount + ' matching</span> &middot; ';
+    html += '<span class="qc-summary-fail">' + mismatchCount + ' mismatched</span> &middot; ';
+    html += sorted.length + ' total tags';
+  }
+  html += '</div>';
+  var el = document.getElementById('qcCompare');
+  el.innerHTML = html;
+  el.style.display = 'block';
+}
+
+/* ===== COMBINED FDF DOWNLOAD =====
+   Re-emits every annotation in qcAnnots with its current (post-colorize,
+   post-manual-match) colors, plus the synthesized Veeva tag labels.
+   Reuses buildExistingAnnotBlock for original annotations and a small
+   adapter for the synthesized labels (which use buildFreeTextLabel). */
+function qcColorArrayToFdfStr(c){
+  if(!c || c.length < 3) return null;
+  return c.map(function(v){ return Math.round(v*1e6)/1e6; }).join(' ');
+}
+
+/* Replace /C and /BC in the raw fields snapshot with the post-colorize
+   values, then call buildExistingAnnotBlock so we keep all the careful
+   geometry-key handling that already works. */
+function qcEmitFromMerged(a){
+  if(a.src === 'qcLabel'){
+    /* Synthesized Veeva tag label — built fresh via existing helper.
+       Pass the PARENT Square's rect (not our shrunk label rect) so
+       buildFreeTextLabel can position the small label inside its parent. */
+    var box = { rect: a.parentRect || a.rect, page: a.page };
+    /* buildFreeTextLabel doesn't accept a custom border color, so we
+       generate it then patch the BC line. The label structure is a
+       fixed shape — find /BC[...] and replace with our color. */
+    var block = buildFreeTextLabel(box, a.tagText);
+    var col = qcColorArrayToFdfStr(a.colorBC);
+    if(col && block){
+      block = block.replace(/\/BC\[[^\]]*\]/, '/BC[' + col + ']');
+    }
+    return block;
+  }
+
+  /* Existing annotation: clone fields, override C/BC with our colors. */
+  var origFields = a.fields || {};
+  var clonedFields = {};
+  for(var k in origFields) clonedFields[k] = origFields[k];
+
+  var cStr = qcColorArrayToFdfStr(a.colorC);
+  var bcStr = qcColorArrayToFdfStr(a.colorBC);
+  /* Per requirement: do NOT recolor FreeText text — leave DA/DS/RC.
+     We DO update BC (border) to reflect the group color. */
+  if(a.subtype === 'FreeText'){
+    if(bcStr) clonedFields.BC = '[' + bcStr + ']';
+    /* C (interior fill) — keep original; the visual cue is the border. */
+  } else {
+    if(cStr) clonedFields.C = '[' + cStr + ']';
+    if(bcStr) clonedFields.BC = '[' + bcStr + ']';
+  }
+
+  return buildExistingAnnotBlock({
+    subtype: a.subtype,
+    page: a.page,
+    fields: clonedFields
+  });
+}
+
+function downloadCombinedFdf(){
+  if(!qcAnnots.length){ alert('Run QC first.'); return; }
+  var blocks = [];
+  for(var i = 0; i < qcAnnots.length; i++){
+    var sub = qcAnnots[i].subtype;
+    if(sub === 'Link' || sub === 'Popup') continue;
+    var block = qcEmitFromMerged(qcAnnots[i]);
+    if(block) blocks.push(block);
+  }
+
+  var fdf = '%FDF-1.2\r\n%\xe2\xe3\xcf\xd3\r\n';
+  fdf += '1 0 obj\r\n<</FDF<</Annots[';
+  fdf += blocks.join('');
+  fdf += ']>>>>\r\nendobj\r\n';
+  fdf += 'trailer\r\n<</Root 1 0 R>>\r\n%%EOF\r\n';
+
+  var bytes = new Uint8Array(fdf.length);
+  for(var i = 0; i < fdf.length; i++) bytes[i] = fdf.charCodeAt(i) & 0xFF;
+
+  /* Naming: prefer right-side filename since the canvas/PDF preview is
+     based on it. Strip extension and append _qc_combined.fdf. */
+  var base = (rightSide && rightSide.fileName) ? rightSide.fileName : pdfFileName;
+  base = base.replace(/\.(pdf|fdf)$/i, '');
+
+  var blob = new Blob([bytes], {type: 'application/vnd.fdf'});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = base + '_qc_combined.fdf';
   a.click();
 }
 </script>
