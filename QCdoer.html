@@ -727,8 +727,11 @@ function parseNumArray(s){
    Pattern 2 (new): p + letter + dash + 1-4 digits + letter
      e.g. pL-26A, pX-1234Y — the 'p' is literal, then any letter, dash, number, letter
      Note: p-26A (no letter after p) does NOT match.
-   Pattern 3 (new): ISI + 1-2 digits + ; + (PPI: or PI:) + pXY
-     e.g. "ISI 8; PPI: p2A", "ISI 12; PI: p5C"
+   Pattern 3 (new): ISI + (1-2 digits OR single letter) + ; + (PPI: or PI:) + pXY,
+     optionally followed by ',X' or '-X' where X is a single letter.
+     e.g. "ISI 8; PPI: p2A", "ISI 12; PI: p5C",
+          "ISI A; PPI: p1A", "ISI 2; PPI: p1I,J",
+          "ISI A; PPI: p1C-E", "ISI A; PPI: p2D-A".
      The full matched string is inserted (not just the pXY portion).
 
    Pattern 3 is matched first so the pXY inside it is not double-counted by Pattern 1.
@@ -748,8 +751,11 @@ function findTags(text){
     return false;
   }
 
-  /* Pattern 3 first: ISI N(N); (PPI|PI): pXY */
-  var re3 = /\b(ISI[ \t]+\d{1,2};[ \t]+(?:PPI|PI):[ \t]+p\d+[A-Za-z])(?![A-Za-z0-9])/gi;
+  /* Pattern 3 first: ISI <digits|letter>; (PPI|PI): pXY[,X|-X]
+     - (?:\d{1,2}|[A-Za-z])    1-2 digits OR a single letter
+     - (?:[,\-][A-Za-z])?      optional trailing ',X' or '-X' (single letter)
+     - (?![A-Za-z0-9])         outer boundary so 'p1I,JK' rolls back to 'p1I' */
+  var re3 = /\b(ISI[ \t]+(?:\d{1,2}|[A-Za-z]);[ \t]+(?:PPI|PI):[ \t]+p\d+[A-Za-z](?:[,\-][A-Za-z])?)(?![A-Za-z0-9])/gi;
   while((m = re3.exec(text)) !== null){
     consumed.push([m.index, m.index + m[0].length]);
     matches.push({pos: m.index, str: m[1]});
