@@ -1757,10 +1757,34 @@ document.getElementById('runQcBtn').addEventListener('click', async function(){
 
   try {
     qcAnnots = qcBuildMerged();
-    statusEl.textContent += 'Merged ' + qcAnnots.length + ' annotations '
-      + '(' + leftSide.allAnnots.length + ' left + ' + rightSide.allAnnots.length + ' right).\n';
 
-    statusEl.textContent += 'Grouping by overlap...\n';
+    /* Detailed merge diagnostics so the user can verify both sides
+       actually contributed to the merged set. Counts per side, then
+       per subtype, then per page. */
+    var leftCount = 0, rightCount = 0;
+    var subBySide = { left: {}, right: {} };
+    var pageBySide = { left: {}, right: {} };
+    for(var i = 0; i < qcAnnots.length; i++){
+      var a = qcAnnots[i];
+      var bucket = a.src === 'right' ? 'right' : 'left';
+      if(bucket === 'right') rightCount++; else leftCount++;
+      subBySide[bucket][a.subtype] = (subBySide[bucket][a.subtype] || 0) + 1;
+      pageBySide[bucket][a.page] = (pageBySide[bucket][a.page] || 0) + 1;
+    }
+    statusEl.textContent += 'Merged ' + qcAnnots.length + ' annotations: '
+      + leftCount + ' from LEFT (' + (leftSide.fileName || '?') + '), '
+      + rightCount + ' from RIGHT (' + (rightSide.fileName || '?') + ').\n';
+    function fmtCounts(obj){
+      var parts = [];
+      for(var k in obj) parts.push(k + '=' + obj[k]);
+      return parts.length ? parts.join(', ') : '(none)';
+    }
+    statusEl.textContent += '  LEFT subtypes: ' + fmtCounts(subBySide.left) + '\n';
+    statusEl.textContent += '  RIGHT subtypes: ' + fmtCounts(subBySide.right) + '\n';
+    statusEl.textContent += '  LEFT pages: ' + fmtCounts(pageBySide.left) + '\n';
+    statusEl.textContent += '  RIGHT pages: ' + fmtCounts(pageBySide.right) + '\n';
+
+    statusEl.textContent += 'Grouping by overlap (IoU \u2265 0.30)...\n';
     var groups = qcGroupSquaresByOverlap(qcAnnots);
     statusEl.textContent += 'Found ' + groups.length + ' Square group(s).\n';
 
@@ -1769,22 +1793,31 @@ document.getElementById('runQcBtn').addEventListener('click', async function(){
     qcGenerateVeevaQCLabels(qcAnnots);
     qcSyncLabelColors();
 
+    var labelCount = 0;
+    for(var i = 0; i < qcAnnots.length; i++) if(qcAnnots[i].src === 'qcLabel') labelCount++;
+    statusEl.textContent += 'Generated ' + labelCount + ' Veeva tag label(s) for download.\n';
+
+    /* Surface the combined-FDF download IMMEDIATELY — the user can
+       download and inspect the .fdf even before the canvas renders, so
+       if the canvas misses something they have a separate way to verify. */
+    qcShowComparison();
+    document.getElementById('qcDownloadPanel').style.display = 'block';
+
     statusEl.textContent += 'Rendering preview...\n';
     if(rightSide.pdfData){
       qcPreviewPdfData = rightSide.pdfData;
       var pj = await pdfjsLib.getDocument({data: qcPreviewPdfData}).promise;
       qcPreviewNumPages = pj.numPages;
-      qcPreviewPageIdx = 0;
-      qcSelected = [];
-      await qcRenderPreviewPage();
-      document.getElementById('qcPreview').style.display = 'block';
     } else {
-      statusEl.textContent += '(Right side is FDF only — preview canvas skipped, but FDF download still works.)\n';
+      qcPreviewPdfData = null;
+      qcPreviewNumPages = 0;
+      statusEl.textContent += '(No right-PDF bytes available \u2014 canvas will use a blank fallback so you can still verify left annotations.)\n';
     }
-
-    qcShowComparison();
-    document.getElementById('qcDownloadPanel').style.display = 'block';
-    statusEl.textContent += 'Done.\n';
+    qcPreviewPageIdx = 0;
+    qcSelected = [];
+    await qcRenderPreviewPage();
+    document.getElementById('qcPreview').style.display = 'block';
+    statusEl.textContent += 'Done. Solid stroke = LEFT (regular). Dashed stroke = RIGHT (Veeva).\n';
   } catch(err){
     statusEl.textContent += '\nError: ' + err.message;
     console.error(err);
@@ -1795,23 +1828,55 @@ document.getElementById('runQcBtn').addEventListener('click', async function(){
 
 /* ===== PREVIEW RENDERING ===== */
 async function qcRenderPreviewPage(){
-  var pj = await pdfjsLib.getDocument({data: qcPreviewPdfData}).promise;
-  var pg = await pj.getPage(qcPreviewPageIdx + 1);
-  var vp = pg.getViewport({scale: qcPreviewScale});
   var c = document.getElementById('qcPreviewCanvas');
   var ctx = c.getContext('2d');
-  c.width = vp.width; c.height = vp.height;
   var o = document.getElementById('qcOverlayCanvas');
-  o.width = vp.width; o.height = vp.height;
-  /* annotationMode 0 = NONE — draw the page without Veeva's own annot rendering,
-     so our overlay isn't competing with default boxes. */
-  await pg.render({canvasContext: ctx, viewport: vp, annotationMode: 0}).promise;
+
+  /* If the current page index is within the right PDF's range, render
+     it normally. If it's beyond (because LEFT has more pages and we
+     extended navigation to cover them), draw a neutral placeholder so
+     the user can still see the left-side annotations on that page. */
+  if(qcPreviewPageIdx < qcPreviewNumPages){
+    var pj = await pdfjsLib.getDocument({data: qcPreviewPdfData}).promise;
+    var pg = await pj.getPage(qcPreviewPageIdx + 1);
+    var vp = pg.getViewport({scale: qcPreviewScale});
+    c.width = vp.width; c.height = vp.height;
+    o.width = vp.width; o.height = vp.height;
+    /* annotationMode 0 = NONE — draw the page without pdf.js's own annot
+       rendering, so our overlay isn't competing with default boxes. */
+    await pg.render({canvasContext: ctx, viewport: vp, annotationMode: 0}).promise;
+  } else {
+    /* Standard US letter at our scale, used as a fallback canvas. */
+    var fallbackW = 612 * qcPreviewScale;
+    var fallbackH = 792 * qcPreviewScale;
+    c.width = fallbackW; c.height = fallbackH;
+    o.width = fallbackW; o.height = fallbackH;
+    ctx.fillStyle = '#fafafa';
+    ctx.fillRect(0, 0, fallbackW, fallbackH);
+    ctx.strokeStyle = '#ddd'; ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, fallbackW - 1, fallbackH - 1);
+    ctx.fillStyle = '#999'; ctx.font = '14px sans-serif';
+    ctx.fillText('(Page ' + (qcPreviewPageIdx + 1) +
+      ' \u2014 not in right PDF; showing left-side annotations only)', 20, 30);
+  }
+
   document.getElementById('qcPageLabel').textContent =
-    '(Page ' + (qcPreviewPageIdx + 1) + ' of ' + qcPreviewNumPages + ')';
-  /* Disable nav buttons at boundaries */
+    '(Page ' + (qcPreviewPageIdx + 1) + ' of ' + qcMaxPageCount() + ')';
   document.getElementById('qcPrevPageBtn').disabled = qcPreviewPageIdx === 0;
-  document.getElementById('qcNextPageBtn').disabled = qcPreviewPageIdx >= qcPreviewNumPages - 1;
+  document.getElementById('qcNextPageBtn').disabled = qcPreviewPageIdx >= qcMaxPageCount() - 1;
   qcDrawOverlays();
+}
+
+/* Maximum page index covered by either side's annotations. Used so
+   navigation can reach LEFT-side pages that don't exist in the RIGHT
+   PDF (e.g. left has 10 pages, right has 8 — we still let the user nav
+   to pages 9 and 10 to see left's annotations there). */
+function qcMaxPageCount(){
+  var maxP = qcPreviewNumPages;
+  for(var i = 0; i < qcAnnots.length; i++){
+    if(qcAnnots[i].page + 1 > maxP) maxP = qcAnnots[i].page + 1;
+  }
+  return maxP;
 }
 
 function qcRgbToHex(c){
@@ -1838,24 +1903,36 @@ function qcDrawOverlays(){
   var S = qcPreviewScale;
   var pH = document.getElementById('qcPreviewCanvas').height / S;
 
+  /* Visual L/V distinction: left side strokes solid, right side strokes
+     short-dashed. So you can tell at a glance which side a box came
+     from even when they overlap. */
+  function applyStyleForSide(src){
+    if(src === 'right') ctx.setLineDash([6, 3]);
+    else ctx.setLineDash([]);
+  }
+
   for(var ai = 0; ai < qcAnnots.length; ai++){
     var a = qcAnnots[ai];
     if(a.page !== qcPreviewPageIdx) continue;
     var r = a.rect;
+    if(!r || r.length < 4) continue;
     var rL = Math.min(r[0],r[2]), rR = Math.max(r[0],r[2]);
     var rB = Math.min(r[1],r[3]), rT = Math.max(r[1],r[3]);
     var cx = rL*S, cy = (pH-rT)*S, cw = (rR-rL)*S, ch = (rT-rB)*S;
     var col = a.subtype === 'FreeText' ? (a.colorBC || a.colorC) : (a.colorC || a.colorBC);
     var hex = col ? qcRgbToHex(col) : '#999999';
     var sel = qcSelected.indexOf(ai) >= 0;
+    var srcTag = a.src === 'right' ? 'V' : (a.src === 'qcLabel' ? 'QC' : 'R');
 
     if(a.subtype === 'Line' && a.endpoints && a.endpoints.length >= 4){
       var ep = a.endpoints;
       ctx.strokeStyle = hex; ctx.lineWidth = 2;
+      applyStyleForSide(a.src);
       ctx.beginPath();
       ctx.moveTo(ep[0]*S, (pH-ep[1])*S);
       ctx.lineTo(ep[2]*S, (pH-ep[3])*S);
       ctx.stroke();
+      ctx.setLineDash([]);
       if(sel){
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
         ctx.beginPath();
@@ -1866,14 +1943,15 @@ function qcDrawOverlays(){
       }
     } else if(a.subtype === 'Square'){
       ctx.strokeStyle = hex; ctx.lineWidth = 2;
+      applyStyleForSide(a.src);
       ctx.strokeRect(cx, cy, cw, ch);
+      ctx.setLineDash([]);
       ctx.fillStyle = hex + '15'; /* 8% alpha */
       ctx.fillRect(cx, cy, cw, ch);
       /* Tiny source label in bottom-right */
       ctx.font = '9px sans-serif'; ctx.fillStyle = hex;
-      var tag = a.src === 'right' ? 'V' : 'R';
       var nm = qcGetColorName(col);
-      var label = nm ? (tag + '·' + nm) : tag;
+      var label = nm ? (srcTag + '·' + nm) : srcTag;
       var tw = ctx.measureText(label).width;
       ctx.fillText(label, cx + cw - tw - 3, cy + ch - 4);
       if(sel){
@@ -1886,7 +1964,9 @@ function qcDrawOverlays(){
       ctx.fillStyle = '#ffffffd0';
       ctx.fillRect(cx, cy, cw, ch);
       ctx.strokeStyle = hex; ctx.lineWidth = 2;
+      applyStyleForSide(a.src);
       ctx.strokeRect(cx, cy, cw, ch);
+      ctx.setLineDash([]);
       /* Text rendered in a neutral color — per requirement, FreeText
          text color is NOT changed by the colorizer. We draw it black-ish
          for legibility on the canvas; actual stored colors stay original. */
@@ -1900,8 +1980,82 @@ function qcDrawOverlays(){
         ctx.strokeRect(cx, cy, cw, ch);
         ctx.setLineDash([]);
       }
+    } else if(a.subtype === 'PolyLine' || a.subtype === 'Polygon'){
+      /* Best-effort polyline/polygon: parse /Vertices and stroke. Falls
+         back to bounding rect if vertices missing. */
+      var verts = a.fields && a.fields.Vertices ? parseVerticesArray(a.fields.Vertices) : null;
+      ctx.strokeStyle = hex; ctx.lineWidth = 2;
+      applyStyleForSide(a.src);
+      if(verts && verts.length >= 4){
+        ctx.beginPath();
+        ctx.moveTo(verts[0]*S, (pH-verts[1])*S);
+        for(var v = 2; v + 1 < verts.length; v += 2){
+          ctx.lineTo(verts[v]*S, (pH-verts[v+1])*S);
+        }
+        if(a.subtype === 'Polygon') ctx.closePath();
+        ctx.stroke();
+      } else {
+        ctx.strokeRect(cx, cy, cw, ch);
+      }
+      ctx.setLineDash([]);
+      ctx.font = '9px sans-serif'; ctx.fillStyle = hex;
+      ctx.fillText(srcTag + '·' + a.subtype, cx + 2, cy - 2 < 0 ? cy + 10 : cy - 2);
+      if(sel){
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
+        ctx.strokeRect(cx, cy, cw, ch);
+        ctx.setLineDash([]);
+      }
+    } else if(a.subtype === 'Highlight' || a.subtype === 'Underline' ||
+              a.subtype === 'StrikeOut' || a.subtype === 'Squiggly'){
+      /* Markup annotations — translucent fill + dashed border so they're
+         clearly visible regardless of the base PDF page color. */
+      ctx.fillStyle = hex + '40'; /* ~25% alpha */
+      ctx.fillRect(cx, cy, cw, ch);
+      ctx.strokeStyle = hex; ctx.lineWidth = 1.5;
+      applyStyleForSide(a.src);
+      ctx.strokeRect(cx, cy, cw, ch);
+      ctx.setLineDash([]);
+      ctx.font = '9px sans-serif'; ctx.fillStyle = hex;
+      ctx.fillText(srcTag + '·' + a.subtype, cx + 2, cy + 10);
+      if(sel){
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
+        ctx.strokeRect(cx, cy, cw, ch);
+        ctx.setLineDash([]);
+      }
+    } else {
+      /* Generic fallback for any subtype we don't have a specialized
+         renderer for (Ink, Stamp, Caret, FileAttachment, Text/Note, …):
+         draw a dashed bounding box with the subtype label so the user
+         can SEE the annotation exists, even if its rich appearance isn't
+         reproduced. */
+      ctx.strokeStyle = hex; ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 3]);
+      ctx.strokeRect(cx, cy, cw, ch);
+      ctx.setLineDash([]);
+      ctx.font = '9px sans-serif'; ctx.fillStyle = hex;
+      ctx.fillText(srcTag + '·' + a.subtype, cx + 2, cy + 10);
+      if(sel){
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.setLineDash([4,4]);
+        ctx.strokeRect(cx, cy, cw, ch);
+        ctx.setLineDash([]);
+      }
     }
   }
+}
+
+/* Parse a /Vertices-style array string "[x1 y1 x2 y2 …]" into a flat
+   numeric array. Used by the PolyLine/Polygon renderer. */
+function parseVerticesArray(s){
+  if(!s) return null;
+  var clean = s.replace(/[\[\]]/g, '').trim();
+  if(!clean) return null;
+  var parts = clean.split(/\s+/);
+  var out = [];
+  for(var i = 0; i < parts.length; i++){
+    var n = parseFloat(parts[i]);
+    if(!isNaN(n)) out.push(n);
+  }
+  return out.length >= 2 ? out : null;
 }
 
 /* ===== CLICK SELECTION ===== */
@@ -2019,7 +2173,7 @@ document.getElementById('qcPrevPageBtn').addEventListener('click', async functio
   }
 });
 document.getElementById('qcNextPageBtn').addEventListener('click', async function(){
-  if(qcPreviewPageIdx < qcPreviewNumPages - 1){
+  if(qcPreviewPageIdx < qcMaxPageCount() - 1){
     qcPreviewPageIdx++; qcSelected = [];
     await qcRenderPreviewPage();
     qcUpdateSelInfo();
